@@ -1,8 +1,9 @@
 ---
 title: "派派Agent交互"
-summary: "与 alphapai-web.rabyte.cn 派派AI Agent 交互——支持人工登录介入、工作区导航、Skills定向调用、自动输入提问、等待并提取回答"
+summary: "与 alphapai-web.rabyte.cn 平台全功能交互——支持全平台模块导航(首页/PaiPai/PaiWork/云盘/日历/会议/研报/转记/翻译/公告/社媒)、人工登录介入、工作区导航、Skills定向调用、自动输入提问、等待并提取回答"
 read_when:
-  - 需要操作 alphapai-web.rabyte.cn 上的 AI Agent
+  - 需要操作 alphapai-web.rabyte.cn 上的任何功能模块
+  - 需要在 AlphaPai 平台模块间导航切换
   - 需要人工先登录后自动操作的场景
   - 需要浏览/选择 PaiWork Skills 广场中的技能
   - 需要定向化调用特定 Skill 向 PaiPai 提问
@@ -10,7 +11,7 @@ read_when:
 
 # 派派Agent交互技能
 
-与 `alphapai-web.rabyte.cn/reading/paiwork` 上的 PaiWork AI Agent 进行全流程交互。支持**人工介入登录**、**工作区导航**、**Skills 定向调用**，登录后自动完成：输入提问 → 点击发送 → 等待输出 → 提取回答。
+与 `alphapai-web.rabyte.cn` 平台进行全功能交互。支持**全平台模块导航**（首页/PaiPai/PaiWork/云盘/日历/会议/研报/转记/翻译/公告/社媒）、**人工介入登录**、**PaiWork 工作区操作**、**Skills 定向调用**，登录后自动完成：输入提问 → 点击发送 → 等待输出 → 提取回答。
 
 ## 前提
 
@@ -26,7 +27,29 @@ export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
 
 ## 页面布局概览
 
-PaiWork 页面采用三栏布局：
+AlphaPai 平台分为两层：**全局导航栏**（左）+ **PaiWork 工作台**（右）。
+
+### 全局导航栏（全平台模块切换）
+
+| 模块 | ID 选择器 | 图标 class | 说明 |
+|------|----------|-----------|------|
+| **首页** | `#aside-menu-myFocus` | `.icon-shouye` | 个人首页/关注 |
+| **PaiPai** | `#aside-menu-paipai` | `.icon-img` | AI 对话助手（独立入口） |
+| **PaiWork** | `#aside-menu-ai-workbench` | `.icon-gongzuotai` | AI 工作台（核心模块） |
+| **云盘** | `#aside-menu-knowledge-base` | `.icon-yunpan` | 知识库/文件管理 |
+| **日历** | `#aside-menu-calendar` | `.icon-rili` | 日程管理 |
+| **会议** | `#aside-menu-meeting` | `.icon-jiyao` | 会议纪要 |
+| **研报** | `#aside-menu-report` | `.icon-yanbao1` | 研究报告 |
+| **转记** | `#aside-menu-convert-meeting` | `.icon-zhuanji` | 会议转写记录 |
+| **翻译** | `#aside-menu-translate-tool` | `.icon-fanyi` | 翻译工具 |
+| **公告** | `#aside-menu-announcement` | `.icon-gonggao1` | 公告信息 |
+| **社媒** | `#aside-menu-social-media` | `.icon-shemei` | 社交媒体 |
+
+> **导航方式**：`document.querySelector('#aside-menu-xxx').click()` — 使用 ID 比 class 更稳定，不受样式变更影响。
+> **当前选中模块**：带 `.is-active` 类的 `el-menu-item`。
+> **导航容器**：`.app-left-side .app-nav .el-menu`
+
+### PaiWork 工作台内部布局（三栏）
 
 | 区域 | CSS 选择器 | 说明 |
 |------|-----------|------|
@@ -579,7 +602,80 @@ browser-use --session paipai eval "
 
 ---
 
-## 五、其他页面操作
+## 五、全平台模块导航
+
+AlphaPai 平台左侧导航栏包含 11 个功能模块，使用 `#aside-menu-*` ID 定位（比 class 更稳定）。
+
+### 切换到指定模块
+
+```bash
+# 通用模板：替换 xxx 为目标模块名
+browser-use --session paipai eval "
+  var item = document.querySelector('#aside-menu-xxx');
+  if (item) { item.click(); 'switched'; } else { 'not_found'; }
+"
+```
+
+**各模块完整切换命令：**
+
+```bash
+# 首页
+browser-use --session paipai eval "document.querySelector('#aside-menu-myFocus')?.click()"
+
+# PaiPai（独立 AI 对话）
+browser-use --session paipai eval "document.querySelector('#aside-menu-paipai')?.click()"
+
+# PaiWork（AI 工作台 — 默认核心模块）
+browser-use --session paipai eval "document.querySelector('#aside-menu-ai-workbench')?.click()"
+
+# 云盘/知识库
+browser-use --session paipai eval "document.querySelector('#aside-menu-knowledge-base')?.click()"
+
+# 日历
+browser-use --session paipai eval "document.querySelector('#aside-menu-calendar')?.click()"
+
+# 会议
+browser-use --session paipai eval "document.querySelector('#aside-menu-meeting')?.click()"
+
+# 研报
+browser-use --session paipai eval "document.querySelector('#aside-menu-report')?.click()"
+
+# 转记（会议转写）
+browser-use --session paipai eval "document.querySelector('#aside-menu-convert-meeting')?.click()"
+
+# 翻译
+browser-use --session paipai eval "document.querySelector('#aside-menu-translate-tool')?.click()"
+
+# 公告
+browser-use --session paipai eval "document.querySelector('#aside-menu-announcement')?.click()"
+
+# 社媒
+browser-use --session paipai eval "document.querySelector('#aside-menu-social-media')?.click()"
+```
+
+### 检测当前所在模块
+
+```bash
+browser-use --session paipai eval "
+  var active = document.querySelector('.el-menu-item.is-active');
+  active ? active.querySelector('.menu-name')?.innerText?.trim() : 'unknown';
+"
+```
+
+### 等待模块加载
+
+切换模块后，页面内容是异步加载的，需等待后才能操作：
+
+```bash
+# 切换后等待 2-3 秒
+sleep 3
+# 然后检查目标内容是否加载完成
+browser-use --session paipai eval "document.querySelector('你的目标选择器') ? 'LOADED' : 'LOADING'"
+```
+
+---
+
+## 六、其他页面操作
 
 ### 模型切换（Ultra ↔ Lite）
 
@@ -623,7 +719,7 @@ browser-use --session paipai eval "
 
 ---
 
-## 六、完整工作流示例
+## 七、完整工作流示例
 
 ### 示例1：定向调用 Skill 分析公司
 
@@ -738,6 +834,18 @@ browser-use --session paipai eval "
 | **报告正文段落** | 中间栏 `.work-content-left p` 等 | Skills 生成的深度报告内容（300+段落） |
 | **报告表格** | `table` | 报告中的数据表格（事件追踪/财务表） |
 | **新手引导遮罩** | `.driver-active` / `.driver-popover-next-btn` | 登录后弹出，需点击"下一步"直到消失或直接移除 DOM |
+| **导航-首页** | `#aside-menu-myFocus` | 全局导航：个人首页 |
+| **导航-PaiPai** | `#aside-menu-paipai` | 全局导航：AI 对话助手 |
+| **导航-PaiWork** | `#aside-menu-ai-workbench` | 全局导航：AI 工作台（核心） |
+| **导航-云盘** | `#aside-menu-knowledge-base` | 全局导航：知识库/文件管理 |
+| **导航-日历** | `#aside-menu-calendar` | 全局导航：日程管理 |
+| **导航-会议** | `#aside-menu-meeting` | 全局导航：会议纪要 |
+| **导航-研报** | `#aside-menu-report` | 全局导航：研究报告 |
+| **导航-转记** | `#aside-menu-convert-meeting` | 全局导航：会议转写 |
+| **导航-翻译** | `#aside-menu-translate-tool` | 全局导航：翻译工具 |
+| **导航-公告** | `#aside-menu-announcement` | 全局导航：公告信息 |
+| **导航-社媒** | `#aside-menu-social-media` | 全局导航：社交媒体 |
+| **导航-当前模块** | `.el-menu-item.is-active` | 带 `.is-active` 类的为当前选中模块 |
 
 ## 注意事项
 

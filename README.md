@@ -1,8 +1,8 @@
 # PaiPai Agent 交互技能 (paipai-agent-interact)
 
-通过 `browser-use` CLI 操控浏览器，与 [Alpha派 PaiWork](https://alphapai-web.rabyte.cn/reading/paiwork) 上的 AI 投研助手 PaiPai 进行全流程交互。
+通过 `browser-use` CLI 操控浏览器，与 [Alpha派 AlphaPai](https://alphapai-web.rabyte.cn) 平台进行全功能交互。
 
-支持**人工介入登录**、**工作区导航**、**Skills 定向调用**、**生成文件提取**，覆盖从登录到获取深度报告的完整链路。
+支持**全平台模块导航**（首页/PaiPai/PaiWork/云盘/日历/会议/研报/转记/翻译/公告/社媒）、**人工介入登录**、**PaiWork 工作区操作**、**Skills 定向调用**、**生成文件提取**，覆盖从登录到获取深度报告的完整链路。
 
 ---
 
@@ -10,6 +10,7 @@
 
 | 能力 | 说明 |
 |------|------|
+| **全平台模块导航** | 切换 AlphaPai 全部 11 个功能模块（使用 `#aside-menu-*` ID 定位，稳定可靠） |
 | **人工登录介入** | 启动有头浏览器，用户手动完成登录（手机号/验证码或账号密码），登录态持久化 |
 | **工作区导航** | 切换工作区/Skills 标签页，浏览文件树，打开/关闭文档 |
 | **Skills 广场浏览** | 查看全部 31 个内置 Skills（研究/日报/数据库/工具四大类） |
@@ -148,6 +149,26 @@ browser-use --session paipai eval "
 ---
 
 ## 核心技术点
+
+### 全平台模块导航（ID 选择器）
+
+AlphaPai 平台左侧导航栏有 11 个功能模块，每个菜单项都有稳定的 `id` 属性（`#aside-menu-*`），比 class 选择器更可靠：
+
+| 模块 | ID | 说明 |
+|------|----|------|
+| 首页 | `#aside-menu-myFocus` | 个人首页/关注 |
+| PaiPai | `#aside-menu-paipai` | AI 对话助手（独立入口） |
+| PaiWork | `#aside-menu-ai-workbench` | AI 工作台（核心模块） |
+| 云盘 | `#aside-menu-knowledge-base` | 知识库/文件管理 |
+| 日历 | `#aside-menu-calendar` | 日程管理 |
+| 会议 | `#aside-menu-meeting` | 会议纪要 |
+| 研报 | `#aside-menu-report` | 研究报告 |
+| 转记 | `#aside-menu-convert-meeting` | 会议转写 |
+| 翻译 | `#aside-menu-translate-tool` | 翻译工具 |
+| 公告 | `#aside-menu-announcement` | 公告信息 |
+| 社媒 | `#aside-menu-social-media` | 社交媒体 |
+
+切换方式：`document.querySelector('#aside-menu-xxx').click()`
 
 ### 登录态持久化（cookie + localStorage）
 
