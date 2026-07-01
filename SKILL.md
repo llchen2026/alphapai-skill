@@ -38,29 +38,141 @@ PaiWork 页面采用三栏布局：
 
 ---
 
-## 一、启动与登录
+## 一、启动与登录（含登录态持久化）
 
-### 第一步：启动有头浏览器（人工登录）
+> **重要**：PaiPai 的认证令牌 `USER_AUTH_TOKEN`（JWT）存储在 **localStorage** 中，不在 cookie 中。cookie 仅含埋点数据。因此登录态持久化需要同时保存 cookie + localStorage。
 
-```bash
-browser-use --headed --session paipai open https://alphapai-web.rabyte.cn/reading/paiwork
+### 登录态持久化目录
+
+```
+~/.browser-use/cookies/
+  ├── paipai_cookies.json    # cookie 数据
+  └── paipai_localstorage.json  # localStorage 数据（含 USER_AUTH_TOKEN）
 ```
 
-**关键点：**
-- `--headed` 确保浏览器窗口可见，用户能手动操作
-- `--session paipai` 使用独立会话，不影响其他浏览器任务
-- 如果未登录，**提示用户手动在窗口中完成登录**（手机号+验证码 或 账号密码）
-- 登录完成后，用户告知"已登录"，再继续
-
-### 第二步：确认登录状态
+### 第一步：尝试自动恢复登录态（无需人工登录）
 
 ```bash
-# 检查页面是否已加载工作台（非登录页）
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+mkdir -p ~/.browser-use/cookies
+
+# 1. 启动浏览器并打开页面
+browser-use --headed --session paipai open https://alphapai-web.rabyte.cn/reading/paiwork
+
+# 2. 如果存在已保存的 cookie，先导入
+if [ -f ~/.browser-use/cookies/paipai_cookies.json ]; then
+  browser-use --session paipai cookies import ~/.browser-use/cookies/paipai_cookies.json
+fi
+
+# 3. 如果存在已保存的 localStorage，注入恢复
+if [ -f ~/.browser-use/cookies/paipai_localstorage.json ]; then
+  browser-use --session paipai eval "
+    var data = JSON.parse($(cat ~/.browser-use/cookies/paipai_localstorage.json));
+    for (var key in data) {
+      window.localStorage.setItem(key, data[key]);
+    }
+    'localStorage_restored: ' + Object.keys(data).length + ' keys';
+  "
+  # 刷新页面让恢复的登录态生效
+  browser-use --session paipai open https://alphapai-web.rabyte.cn/reading/paiwork
+fi
+```
+
+### 第二步：检查登录状态
+
+```bash
+sleep 3
 browser-use --session paipai eval "
   var hasTextarea = document.querySelector('textarea');
-  var hasWorkbench = document.querySelector('.ai-workbench-main');
-  hasTextarea && hasWorkbench ? 'LOGGED_IN' : 'NOT_LOGGED_IN';
+  var hasToken = window.localStorage.getItem('USER_AUTH_TOKEN');
+  var tokenValid = hasToken && hasToken.length > 50;
+  hasTextarea && tokenValid ? 'LOGGED_IN' : 'NEED_LOGIN';
 "
+```
+
+- **返回 `LOGGED_IN`**：自动恢复成功，直接开始使用
+- **返回 `NEED_LOGIN`**：登录态已过期或不完整，进入第三步
+
+### 第三步：人工登录（首次或 token 过期时）
+
+```bash
+# 提示用户在浏览器窗口中手动登录
+# 登录方式：手机号+验证码 或 账号密码
+# 登录完成后用户告知"已登录"
+```
+
+### 第四步：登录成功后保存登录态（关键！）
+
+```bash
+# 登录成功后立即执行，确保下次可自动恢复
+
+# 1. 导出 cookie
+browser-use --session paipai cookies export ~/.browser-use/cookies/paipai_cookies.json --url https://alphapai-web.rabyte.cn
+
+# 2. 导出 localStorage（含 USER_AUTH_TOKEN）
+browser-use --session paipai eval "
+  var keys = Object.keys(window.localStorage);
+  var data = {};
+  for (var i = 0; i < keys.length; i++) {
+    data[keys[i]] = window.localStorage.getItem(keys[i]);
+  }
+  JSON.stringify(data);
+" > ~/.browser-use/cookies/paipai_localstorage.json
+
+# 验证已保存
+cat ~/.browser-use/cookies/paipai_localstorage.json | grep -o 'USER_AUTH_TOKEN' && echo 'TOKEN_SAVED' || echo 'NO_TOKEN'
+```
+
+### Token 有效期说明
+
+- `USER_AUTH_TOKEN` 是 JWT 格式，`exp` 字段表示过期时间
+- 当前观测有效期约 **30 天**（iat 1782917199 → exp 1785509199）
+- 过期后需重新人工登录并重新保存
+
+### 完整启动脚本（可直接复制使用）
+
+```bash
+#!/bin/bash
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+COOKIE_DIR="$HOME/.browser-use/cookies"
+URL="https://alphapai-web.rabyte.cn/reading/paiwork"
+mkdir -p "$COOKIE_DIR"
+
+# 启动浏览器
+browser-use --headed --session paipai open "$URL"
+sleep 2
+
+# 恢复 cookie
+if [ -f "$COOKIE_DIR/paipai_cookies.json" ]; then
+  browser-use --session paipai cookies import "$COOKIE_DIR/paipai_cookies.json"
+fi
+
+# 恢复 localStorage
+if [ -f "$COOKIE_DIR/paipai_localstorage.json" ]; then
+  browser-use --session paipai eval "
+    var data = JSON.parse($(cat "$COOKIE_DIR/paipai_localstorage.json"));
+    for (var key in data) { window.localStorage.setItem(key, data[key]); }
+    'restored';
+  "
+  browser-use --session paipai open "$URL"
+  sleep 3
+fi
+
+# 检查登录状态
+STATUS=$(browser-use --session paipai eval "
+  var t = document.querySelector('textarea');
+  var token = window.localStorage.getItem('USER_AUTH_TOKEN');
+  t && token && token.length > 50 ? 'LOGGED_IN' : 'NEED_LOGIN';
+")
+
+echo "STATUS: $STATUS"
+
+if echo "$STATUS" | grep -q "NEED_LOGIN"; then
+  echo "请手动在浏览器窗口完成登录"
+  echo "登录完成后运行保存命令："
+  echo "  browser-use --session paipai cookies export $COOKIE_DIR/paipai_cookies.json --url https://alphapai-web.rabyte.cn"
+  echo "  browser-use --session paipai eval \"...localStorage dump...\" > $COOKIE_DIR/paipai_localstorage.json"
+fi
 ```
 
 ---
@@ -591,7 +703,7 @@ browser-use --session paipai eval "
 
 ## 注意事项
 
-1. **登录态保持**：使用 `--session paipai` 保持会话，同一 session 不会丢失登录状态
+1. **登录态持久化**：PaiPai 的认证令牌 `USER_AUTH_TOKEN`（JWT）存在 **localStorage** 中而非 cookie。需同时保存 cookie + localStorage 才能跨会话恢复登录态（见「一、启动与登录」）。Token 有效期约 30 天
 2. **Vue 响应式**：设置 textarea 值时必须使用 `nativeInputValueSetter` + `dispatchEvent('input')`，否则 Vue 不会更新
 3. **流式输出**：AI 回答是流式的，必须等待"搞定回答"且无"马不停蹄"再提取
 4. **上下文限制**：页面有上下文消耗指示（`.context-token-ring`），超限（通常>80%）需新建会话
