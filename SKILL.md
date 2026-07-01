@@ -719,7 +719,179 @@ browser-use --session paipai eval "
 
 ---
 
-## 七、完整工作流示例
+## 七、首页模块内容（#aside-menu-myFocus）
+
+首页是聚合信息流，包含**一键唤醒 Agent 卡片**、**蓝宝书每日必看**、**机构热议**三大板块。
+
+### 7.1 一键唤醒 Agent 卡片
+
+首页顶部的快捷 Agent 入口（会议助手、公司一页纸、行业一页纸、写报告、画图）。
+
+```bash
+# 提取所有 Agent 卡片信息（名称 + 动作描述）
+browser-use --session paipai eval "
+  var cards = document.querySelectorAll('.agent-door .agent-card');
+  var result = [];
+  for (var i = 0; i < cards.length; i++) {
+    var title = cards[i].querySelector('.card-title');
+    var action = cards[i].querySelector('.card-action');
+    result.push(
+      (title ? title.innerText.trim() : 'N/A') +
+      ' → ' +
+      (action ? action.innerText.trim() : '')
+    );
+  }
+  result.join(' | ');
+"
+```
+
+**选择器：**
+
+| 元素 | 选择器 | 说明 |
+|------|--------|------|
+| Agent 卡片容器 | `.agent-door .agent-card` | 单个 Agent 卡片 |
+| 卡片标题 | `.agent-card .card-title` | 如"会议助手""公司一页纸" |
+| 卡片动作描述 | `.agent-card .card-action` | 如"3分钟get公司基本面" |
+| 更多入口 | `.agent-door .more-link` | "更多"链接 |
+| 区域标题 | `.agent-door-header .header-title .title-text` | "一键唤醒" |
+
+### 7.2 蓝宝书（每日必看）
+
+PaiPai 总结的每日研报精选，分国内版和全球版。
+
+```bash
+# 提取蓝宝书卡片信息
+browser-use --session paipai eval "
+  var cards = document.querySelectorAll('.blue-book-card');
+  var result = [];
+  for (var i = 0; i < cards.length; i++) {
+    var isDomestic = cards[i].classList.contains('domestic');
+    var title = cards[i].querySelector('.card-title');
+    var summary = cards[i].querySelector('.summary');
+    var time = cards[i].querySelector('.update-time');
+    result.push(
+      (isDomestic ? '[国内]' : '[全球]') + ' ' +
+      (title ? title.innerText.trim() : '') +
+      ' | ' + (summary ? summary.innerText.trim() : '') +
+      ' | ' + (time ? time.innerText.trim() : '')
+    );
+  }
+  result.join('\n');
+"
+```
+
+**选择器：**
+
+| 元素 | 选择器 | 说明 |
+|------|--------|------|
+| 蓝宝书容器 | `.blue-book-container` | 整个蓝宝书板块 |
+| 国内版卡片 | `.blue-book-card.domestic` | 国内每日必看 |
+| 全球版卡片 | `.blue-book-card.global` | 全球每日必看 |
+| 卡片标题 | `.blue-book-card .card-title` | 如"7月1日晚间版" |
+| 摘要 | `.blue-book-card .summary` | 核心要点摘要 |
+| 更新时间 | `.blue-book-card .update-time` | 如"今天 20:06" |
+| 播放按钮 | `.blue-book-card .play-btn` | 语音播报按钮 |
+| 更多入口 | `.blue-book-container .more-btn` | "更多"链接 |
+
+### 7.3 机构热议（研报 + 点评信息流）
+
+基于用户自选股/板块定制的信息流，包含**研报卡片**和**机构点评卡片**两种类型。
+
+```bash
+# 提取所有研报卡片信息
+browser-use --session paipai eval "
+  var cards = document.querySelectorAll('.cp-recommend-wrap .report-card');
+  var result = [];
+  for (var i = 0; i < cards.length; i++) {
+    var broker = cards[i].querySelector('.left .name');
+    var title = cards[i].querySelector('.title-box .title');
+    var summary = cards[i].querySelector('.summary');
+    var industry = cards[i].querySelector('.industry-box .item-bottom-text');
+    var time = cards[i].querySelector('.time');
+    var page = cards[i].querySelector('.page');
+    result.push(
+      '[' + (broker ? broker.innerText.trim() : '') + '] ' +
+      (title ? title.innerText.trim() : '') +
+      ' | 行业: ' + (industry ? industry.innerText.trim() : 'N/A') +
+      ' | ' + (page ? page.innerText.trim() : '') +
+      ' | ' + (time ? time.innerText.trim() : '')
+    );
+  }
+  result.join('\n');
+"
+
+# 提取所有机构点评卡片信息
+browser-use --session paipai eval "
+  var cards = document.querySelectorAll('.cp-recommend-wrap .comment-card');
+  var result = [];
+  for (var i = 0; i < cards.length; i++) {
+    var source = cards[i].querySelector('.left .name');
+    var title = cards[i].querySelector('.comment-title .title');
+    var content = cards[i].querySelector('.content');
+    var tags = cards[i].querySelectorAll('.comment-title .tag');
+    var industry = cards[i].querySelector('.industry-box .item-bottom-text');
+    var time = cards[i].querySelector('.industry-and-stock .time');
+    var tagText = [];
+    tags.forEach(function(t){ tagText.push(t.innerText.trim()); });
+    result.push(
+      '[' + (source ? source.innerText.trim() : '') + '] ' +
+      (title ? title.innerText.trim() : '') +
+      (tagText.length ? ' (' + tagText.join(',') + ')' : '') +
+      ' | 行业: ' + (industry ? industry.innerText.trim() : 'N/A') +
+      ' | ' + (time ? time.innerText.trim() : '')
+    );
+  }
+  result.join('\n');
+"
+```
+
+**选择器：**
+
+| 元素 | 选择器 | 说明 |
+|------|--------|------|
+| 信息流容器 | `.cp-recommend-wrap` | 机构热议内容区 |
+| 空状态 | `.cp-no-follow-stock-wrap` | 未添加自选股时显示 |
+| 空状态按钮 | `.cp-no-follow-stock-btn` | "立即添加自选股" |
+| **研报卡片** | `.report-card` | 单条研报 |
+| 研报-券商logo | `.report-card .left .logo` | 券商 logo |
+| 研报-券商名称 | `.report-card .left .name` | 如"中泰证券""华泰期货" |
+| 研报-标题 | `.report-card .title-box .title` | 研报标题 |
+| 研报-摘要 | `.report-card .summary` | 研报摘要内容 |
+| 研报-行业标签 | `.report-card .industry-box .item-bottom-text` | 如"电力设备""电子" |
+| 研报-个股标签 | `.report-card .single-stock-with-focus .stock-name` | 关联个股名称 |
+| 研报-页数 | `.report-card .page` | 如"15页""10页" |
+| 研报-时间 | `.report-card .time` | 如"今天""昨天" |
+| 研报-PDF图标 | `.report-card .pdf-icon` | 表示有 PDF |
+| **点评卡片** | `.comment-card` | 单条机构点评 |
+| 点评-来源 | `.comment-card .left .name` | 如"机构点评""华创海外""华西机械" |
+| 点评-标题 | `.comment-card .comment-title .title` | 点评标题 |
+| 点评-标签 | `.comment-card .comment-title .tag` | 如"干货""业绩点评" |
+| 点评-正文 | `.comment-card .content` | 点评详细内容 |
+| 点评-行业标签 | `.comment-card .industry-box .item-bottom-text` | 关联行业 |
+| 点评-个股标签 | `.comment-card .single-stock-with-focus .stock-name` | 关联个股 |
+| 点评-时间 | `.comment-card .industry-and-stock .time` | 如"23小时前""昨天" |
+| 点评-关闭按钮 | `.comment-card .btn-close` | 关闭推荐卡片 |
+| **板块切换** | `.my-focus-header-container .title .active` | 当前选中的 Tab（如"机构热议"） |
+
+### 7.4 点击研报/点评卡片查看详情
+
+```bash
+# 点击第1条研报卡片
+browser-use --session paipai eval "
+  var card = document.querySelectorAll('.cp-recommend-wrap .report-card')[0];
+  if (card) { card.click(); 'clicked'; } else { 'no_card'; }
+"
+
+# 点击第1条点评卡片
+browser-use --session paipai eval "
+  var card = document.querySelectorAll('.cp-recommend-wrap .comment-card')[0];
+  if (card) { card.click(); 'clicked'; } else { 'no_card'; }
+"
+```
+
+---
+
+## 八、完整工作流示例
 
 ### 示例1：定向调用 Skill 分析公司
 
@@ -846,6 +1018,17 @@ browser-use --session paipai eval "
 | **导航-公告** | `#aside-menu-announcement` | 全局导航：公告信息 |
 | **导航-社媒** | `#aside-menu-social-media` | 全局导航：社交媒体 |
 | **导航-当前模块** | `.el-menu-item.is-active` | 带 `.is-active` 类的为当前选中模块 |
+| **首页-Agent卡片** | `.agent-door .agent-card` | 一键唤醒 Agent 入口（会议助手/公司一页纸等） |
+| **首页-蓝宝书国内** | `.blue-book-card.domestic` | 每日必看国内版 |
+| **首页-蓝宝书全球** | `.blue-book-card.global` | 每日必看全球版 |
+| **首页-蓝宝书摘要** | `.blue-book-card .summary` | 核心要点摘要 |
+| **首页-研报卡片** | `.report-card` | 机构热议中的研报 |
+| **首页-研报券商** | `.report-card .left .name` | 研报来源券商 |
+| **首页-研报标题** | `.report-card .title-box .title` | 研报标题 |
+| **首页-点评卡片** | `.comment-card` | 机构热议中的点评 |
+| **首页-点评来源** | `.comment-card .left .name` | 点评来源（如"华创海外"） |
+| **首页-点评正文** | `.comment-card .content` | 点评详细内容 |
+| **首页-空状态** | `.cp-no-follow-stock-btn` | 未添加自选股时的引导按钮 |
 
 ## 注意事项
 
