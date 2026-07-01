@@ -90,8 +90,45 @@ browser-use --session paipai eval "
 "
 ```
 
-- **返回 `LOGGED_IN`**：自动恢复成功，直接开始使用
+- **返回 `LOGGED_IN`**：自动恢复成功，执行「清除新手引导遮罩」后开始使用
 - **返回 `NEED_LOGIN`**：登录态已过期或不完整，进入第三步
+
+### 清除新手引导遮罩（每次登录后必须执行）
+
+PaiPai 登录后可能弹出新手引导浮层（driver.js 引导），会遮挡页面元素导致操作失败。必须清除后才能正常操作。
+
+```bash
+# 方法1（推荐）：循环点击"下一步"直到引导结束
+browser-use --session paipai eval "
+  var maxSteps = 10;
+  var interval = setInterval(function() {
+    var next = document.querySelector('.driver-popover-next-btn');
+    if (next) {
+      next.click();
+      maxSteps--;
+      if (maxSteps <= 0) clearInterval(interval);
+    } else {
+      clearInterval(interval);
+    }
+  }, 300);
+  'dismissing_tour';
+"
+
+# 等待引导动画完成
+sleep 3
+
+# 检查是否清除成功
+browser-use --session paipai eval "
+  document.querySelector('.driver-active') ? 'STILL_BLOCKED' : 'CLEARED';
+"
+
+# 方法2（暴力）：直接移除遮罩 DOM 元素（如果方法1无效）
+browser-use --session paipai eval "
+  var driverEls = document.querySelectorAll('.driver-active, .driver-popover, .driver-overlay, .driver-page-overlay, [class*=\"driver-popover\"]');
+  driverEls.forEach(function(el) { el.remove(); });
+  'removed: ' + driverEls.length + ' elements';
+"
+```
 
 ### 第三步：人工登录（首次或 token 过期时）
 
@@ -104,7 +141,7 @@ browser-use --session paipai eval "
 ### 第四步：登录成功后保存登录态（关键！）
 
 ```bash
-# 登录成功后立即执行，确保下次可自动恢复
+# 登录成功后，先清除新手引导遮罩（见上方），然后立即保存
 
 # 1. 导出 cookie
 browser-use --session paipai cookies export ~/.browser-use/cookies/paipai_cookies.json --url https://alphapai-web.rabyte.cn
@@ -700,18 +737,20 @@ browser-use --session paipai eval "
 | **生成文件项** | `.file-item`（可点击）/ `.file-item .title` | Skills 生成的文档，点击可在中间栏重新打开 |
 | **报告正文段落** | 中间栏 `.work-content-left p` 等 | Skills 生成的深度报告内容（300+段落） |
 | **报告表格** | `table` | 报告中的数据表格（事件追踪/财务表） |
+| **新手引导遮罩** | `.driver-active` / `.driver-popover-next-btn` | 登录后弹出，需点击"下一步"直到消失或直接移除 DOM |
 
 ## 注意事项
 
 1. **登录态持久化**：PaiPai 的认证令牌 `USER_AUTH_TOKEN`（JWT）存在 **localStorage** 中而非 cookie。需同时保存 cookie + localStorage 才能跨会话恢复登录态（见「一、启动与登录」）。Token 有效期约 30 天
-2. **Vue 响应式**：设置 textarea 值时必须使用 `nativeInputValueSetter` + `dispatchEvent('input')`，否则 Vue 不会更新
-3. **流式输出**：AI 回答是流式的，必须等待"搞定回答"且无"马不停蹄"再提取
-4. **上下文限制**：页面有上下文消耗指示（`.context-token-ring`），超限（通常>80%）需新建会话
-5. **Skills 自动匹配**：仅输入公司名/代码时，PaiWork 会自动匹配"公司一页纸"技能
-6. **不要伪造内容**：所有内容必须通过 `browser-use eval` 实际获取
-7. **PATH**：每个 bash 命令前需 `export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"`
-8. **深度报告内容位置**：Skills 生成的深度报告（如公司一页纸）内容在**中间栏 `<p>` 标签**中（300+段落），不在 `.text-content` 中（那里只有简短摘要）。需分段提取后拼接
-9. **等待时间**：深度报告类 Skills（公司一页纸、行业一页纸、深度报告）生成耗时较长（3-5分钟），需多次轮询检测完成状态
+2. **新手引导遮罩**：每次登录后 PaiPai 可能弹出 driver.js 新手引导（`.driver-active`），会遮挡所有操作。**登录后必须先清除遮罩**再执行后续操作（见「清除新手引导遮罩」章节）
+3. **Vue 响应式**：设置 textarea 值时必须使用 `nativeInputValueSetter` + `dispatchEvent('input')`，否则 Vue 不会更新
+4. **流式输出**：AI 回答是流式的，必须等待"搞定回答"且无"马不停蹄"再提取
+5. **上下文限制**：页面有上下文消耗指示（`.context-token-ring`），超限（通常>80%）需新建会话
+6. **Skills 自动匹配**：仅输入公司名/代码时，PaiWork 会自动匹配"公司一页纸"技能
+7. **不要伪造内容**：所有内容必须通过 `browser-use eval` 实际获取
+8. **PATH**：每个 bash 命令前需 `export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"`
+9. **深度报告内容位置**：Skills 生成的深度报告（如公司一页纸）内容在**中间栏 `<p>` 标签**中（300+段落），不在 `.text-content` 中（那里只有简短摘要）。需分段提取后拼接
+10. **等待时间**：深度报告类 Skills（公司一页纸、行业一页纸、深度报告）生成耗时较长（3-5分钟），需多次轮询检测完成状态
 
 ## 关闭浏览器
 
