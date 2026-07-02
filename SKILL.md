@@ -61,6 +61,21 @@ AlphaPai 平台分为两层：**全局导航栏**（左）+ **PaiWork 工作台*
 
 左侧栏有两个标签页：**工作区**（文件树）和 **Skills**（技能列表）。
 
+> **⚠️ 关键：输入内容必须在「PaiWork AI工作台」模式，不是「Ask PaiPai」模式！**
+>
+> PaiWork 左侧栏有模式切换菜单（`.mode-menu`），包含三个选项：
+> - **PaiPai** — 主菜单入口
+> - **PaiWork AI工作台** — ⭐ **核心工作模式，所有提问和 Skills 调用都在这里进行**
+> - **Ask PaiPai** — 轻量对话模式，生成内容有限
+>
+> **始终使用「PaiWork AI工作台」模式输入提问**，它会生成更丰富的研究内容（深度报告、一页纸、Challenge等）。
+> Ask PaiPai 仅做简单问答，不适合投研分析。
+>
+> 检查当前模式：
+> ```javascript
+> document.querySelector('.mode-menu .is-active')?.innerText  // 应为 "PaiWork AI工作台"
+> ```
+
 ---
 
 ## 一、启动与登录（含登录态持久化）
@@ -326,78 +341,168 @@ PaiWork Skills 广场包含以下技能（截至 2026-06-30）：
 | AI PPT | 自动生成投研演示文稿 |
 | 有道云笔记同步 | 同步有道云笔记内容 |
 
-### 浏览 Skills 广场
+### Skills 树结构（精确 DOM 定位）
 
-```bash
-# 切换到 Skills 标签
-browser-use --session paipai eval "
-  var tabs = document.querySelectorAll('.tab-item');
-  for (var i = 0; i < tabs.length; i++) {
-    if (tabs[i].innerText.includes('Skills')) { tabs[i].click(); break; }
-  }
-"
-sleep 1
+> 用户提供的 Skills 面板有精确的 `data-node-id` 属性，可直接定位。
 
-# 获取所有 Skill 名称（短文本行）
-browser-use --session paipai eval "
-  var main = document.querySelector('.ai-workbench-main');
-  var lines = main.innerText.split('\\n');
-  var skills = [];
-  var seen = {};
-  lines.forEach(function(line) {
-    line = line.trim();
-    if (line.length >= 2 && line.length <= 20 && !seen[line]) {
-      if (!/^(我的|机构|官方|广场|数据|研究|工具|工作区|Skills|新建|搜索|刷新|多选)$/.test(line)) {
-        seen[line] = 1;
-        skills.push(line);
-      }
-    }
-  });
-  skills.join(' | ');
-"
+#### 进入 Skills 面板
 
-# 滚动查看更多 Skills
-browser-use --session paipai scroll down --amount 2000
+点击左侧栏的 `<span class="tab-item">Skills</span>` 标签页：
 
-# 切换 Skills 分类标签（广场/数据/研究/工具/我的/机构/官方）
-browser-use --session paipai eval "
-  var tabs = document.querySelectorAll('.skills-label-tab');
-  for (var i = 0; i < tabs.length; i++) {
-    if (tabs[i].innerText.includes('研究')) { tabs[i].click(); break; }
-  }
-"
+```javascript
+// 点击 Skills 标签页（不是工作区标签页）
+var tabs = document.querySelectorAll('.tab-item');
+for (var i = 0; i < tabs.length; i++) {
+  if (tabs[i].innerText.trim() === 'Skills') { tabs[i].click(); break; }
+}
 ```
+
+#### Skills 面板 DOM 结构
+
+```
+.scroll-area
+└── .skills-tree-wrap
+    ├── .skills-tree-tab             ← 分类切换标签
+    │   ├── .skills-tree-tab__item   → "我的"
+    │   ├── .skills-tree-tab__item   → "机构"
+    │   └── .skills-tree-tab__item.is-active → "官方"（默认选中）
+    └── .skills-tree                  ← 技能树
+        ├── .tree-node[data-node-id="virtual_research"]  → "研究"（折叠节点）
+        ├── .tree-node[data-node-id="virtual_data"]      → "数据"（折叠节点）
+        └── .tree-node[data-node-id="virtual_tool"]       → "工具"（折叠节点）
+```
+
+#### 切换分类标签
+
+```javascript
+// 切换到"我的"/"机构"/"官方"
+var catTabs = document.querySelectorAll('.skills-tree-tab__item');
+// catTabs[0]="我的", [1]="机构", [2]="官方"
+catTabs[2].click();  // 切换到"官方"
+```
+
+#### 展开/折叠分类文件夹
+
+```javascript
+// 展开某个分类（如"研究"），点击 folder 节点行
+var node = document.querySelector('.node-row[data-node-id="virtual_research"]');
+if (node) node.click();
+
+// 或者通过箭头图标
+var arrow = document.querySelector('[data-node-id="virtual_research"] .arrow i');
+if (arrow) arrow.click();
+```
+
+### Skills 完整清单（官方分类，含 data-node-id）
+
+> 每个 Skill 都有唯一的 `data-node-id`，可精确点击调用。
+
+#### 研究类（`virtual_research` 文件夹下）
+
+| Skill 名称 | data-node-id | 用途 |
+|-----------|-------------|------|
+| 公募基金研究 | `L3NraWxscy9wdWJsaWMvZnVuZC1yZXNlYXJjaA` | 公募基金分析与研究 |
+| 调研/策略会日程 | `L3NraWxscy9wdWJsaWMvb2ZmbGluZS1zY2hlZHVsZS1wbGFubmVy` | 调研和策略会日程 |
+| 业绩/公告/事件点评 | `L3NraWxscy9wdWJsaWMvYW5ub3VuY2VtZW50LWNvbW1lbnRhcnk` | 业绩/公告/事件快速点评 |
+| 每日涨跌复盘 | `L3NraWxscy9wdWJsaWMvZGFpbHktbW92ZXJzLXJlY2Fw` | 每日市场涨跌原因复盘 |
+| 可比公司分析 | `L3NraWxscy9wdWJsaWMvcGVlci1jb21wYXJpc29u` | 可比公司估值对比 |
+| 私域预约会议日报 | `L3NraWxscy9wdWJsaWMvYm9va2VkLXJvYWRzaG93LW1pbnV0ZXM` | 私域预约会议日报 |
+| 公司调研大纲 | `L3NraWxscy9wdWJsaWMvcmVzZWFyY2gtcXVlc3Rpb24tZ2VuZXJhdG9y` | 调研前准备大纲 |
+| **观点Challenge** | `L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU` | ⭐ **对投资观点多角度挑战质疑** |
+| 行业一页纸 | `L3NraWxscy9wdWJsaWMvaW5kdXN0cnktb25lLXBhZ2Vy` | 行业投研快速了解 |
+| 公司边际变化跟踪 | `L3NraWxscy9wdWJsaWMvbWFyZ2luYWwtY2hhbmdlLXRyYWNrZXI` | 持续跟踪公司边际变化 |
+| 主题选股 | `L3NraWxscy9wdWJsaWMvdGhlbWF0aWMtc3RvY2stc2NyZWVuaW5n` | 按主题/概念筛选股票 |
+| 公司一页纸 | `L3NraWxscy9wdWJsaWMvY29tcGFueS1vbmUtcGFnZXI` | 上市公司买方投研快报 |
+| 宏观事件分析 | `L3NraWxscy9wdWJsaWMvbWFjcm8tZXZlbnQtYW5hbHlzaXM` | 宏观事件影响分析 |
+| 历史复盘 | `L3NraWxscy9wdWJsaWMvaW5zdHJ1bWVudC1oaXN0b3J5LXJlY2Fw` | 事件/行情历史复盘 |
+| 全球资本市场日报 | `L3NraWxscy9wdWJsaWMvZ2xvYmFsLW1hcmtldC1kYWlseQ` | 全球市场每日概览 |
+| 公众号订阅日报 | `L3NraWxscy9wdWJsaWMvc3Vic2NyaXB0aW9uLWRpZ2VzdA` | 公众号订阅日报 |
+| 深度报告 | `L3NraWxscy9wdWJsaWMvcGFpcGFpLXJlcG9ydA` | 深度投研报告 |
+
+#### 数据类（`virtual_data` 文件夹下）
+
+| Skill 名称 | data-node-id | 用途 |
+|-----------|-------------|------|
+| 全球市场数据库 | `L3NraWxscy9wdWJsaWMvc2VhcmNoLWdsb2JhbC1kYXRh` | 全球市场行情数据 |
+| Alpha派投研公共文档库 | `L3NraWxscy9wdWJsaWMvYWxwaGFwYWktcHVibGljLXJlc2VhcmNoLWxpYnJhcnk` | 公共投研文档 |
+| Alpha派市场情绪数据库 | `L3NraWxscy9wdWJsaWMvYWxwaGFwYWktbWFya2V0LXNlbnRpbWVudC1kYXRh` | 热搜/蓝宝书情绪数据 |
+| 美股投资数据库 | `L3NraWxscy9wdWJsaWMvdXMtc3RvY2stZGF0YQ` | 美股基本面数据 |
+| 港股投资数据库 | `L3NraWxscy9wdWJsaWMvaGstc3RvY2stZGF0YQ` | 港股基本面数据 |
+| 全球宏观经济数据库（EDB） | `L3NraWxscy9wdWJsaWMvZWRiLW1hY3JvLWRhdGE` | 宏观经济指标 |
+| A股投资数据库 | `L3NraWxscy9wdWJsaWMvY24tc3RvY2stZGF0YQ` | A股基本面数据 |
+| 实时行情数据库 | `L3NraWxscy9wdWJsaWMvcmVhbHRpbWUtbWFya2V0LWRhdGE` | 实时行情报价 |
+| Alpha派投研私域知识库 | `L3NraWxscy9wdWJsaWMvYWxwaGFwYWktcGVyc29uYWwtcmVzZWFyY2gtZGlzaw` | 用户私域研究资料 |
+| 债市研究数据库 | `L3NraWxscy9wdWJsaWMvYm9uZC1kYXRh` | 债券市场数据 |
+| 公募基金数据库 | `L3NraWxscy9wdWJsaWMvZnVuZC1kYXRh` | 公募基金持仓/净值 |
+
+#### 工具类（`virtual_tool` 文件夹下）
+
+| Skill 名称 | data-node-id | 用途 |
+|-----------|-------------|------|
+| 浏览器代理 | `L3NraWxscy9wdWJsaWMvYnJvd3Nlci11c2U` | 自主浏览复杂网页 |
+| 有道云笔记同步 | `L3NraWxscy9wdWJsaWMveW91ZGFvLW5vdGUtc3luYw` | 有道云笔记同步 |
 
 ### 定向调用特定 Skill
 
-在 PaiPai 输入框中通过 `/` 唤醒 Skills，或直接在提问中引用 Skill 名称：
+#### 方法1（推荐）：通过 data-node-id 点击 Skills 树中的技能
 
 ```bash
-# 方法1：在输入框中输入 "/" 触发 Skills 面板
+# 确保在 PaiWork AI工作台模式 + Skills 标签页
+# 然后点击特定 Skill（如"观点Challenge"）
+browser-use --session paipai eval "
+  // 1. 切换到 Skills 标签页
+  var tabs = document.querySelectorAll('.tab-item');
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].innerText.trim() === 'Skills') { tabs[i].click(); break; }
+  }
+"
+sleep 1
+
+# 2. 点击目标 Skill 的 node-row
+browser-use --session paipai eval "
+  var skillNode = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
+  if (skillNode) {
+    skillNode.click();
+    'CLICKED: 观点Challenge';
+  } else {
+    // 可能需要先展开"研究"文件夹
+    var researchFolder = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
+    if (researchFolder) {
+      researchFolder.click();
+      'NEED_EXPAND_RESEARCH';
+    } else {
+      'SKILLS_TAB_NOT_ACTIVE';
+    }
+  }
+"
+sleep 2
+
+# 3. Skill 选中后，在 textarea 中输入参数并提交
 browser-use --session paipai eval "
   var t = document.querySelector('textarea');
   var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(t, '/');
+  setter.call(t, '恒逸石化');
   t.dispatchEvent(new Event('input', { bubbles: true }));
-  'slash triggered';
+  t.dispatchEvent(new Event('change', { bubbles: true }));
+  'skill_param_set';
 "
-sleep 1
-# 然后查看 Skills 面板内容
-browser-use --session paipai state
+```
 
-# 方法2（推荐）：直接在问题中引用 Skill 名称
-# 例如调用"公司一页纸"技能
+#### 方法2：在 PaiWork 输入框中引用 Skill 名称
+
+```bash
+# 直接在提问中引用 Skill 名称（PaiWork 会自动匹配）
 browser-use --session paipai eval "
   var t = document.querySelector('textarea');
   var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
   setter.call(t, '使用「公司一页纸」技能分析北方华创');
   t.dispatchEvent(new Event('input', { bubbles: true }));
-  'skill invoked';
 "
-# 点击发送
-browser-use --session paipai eval "document.querySelector('.submit-btn').click(); 'sent'"
+```
 
-# 方法3：直接输入公司名/代码（PaiWork 会自动匹配"公司一页纸"技能）
+#### 方法3：输入公司名/代码（PaiWork 自动匹配"公司一页纸"）
+
+```bash
 browser-use --session paipai eval "
   var t = document.querySelector('textarea');
   var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
@@ -406,9 +511,45 @@ browser-use --session paipai eval "
 "
 ```
 
+#### 发送（Enter 键或点击发送按钮）
+
+```bash
+# 方式1：Enter 键（需完整事件序列才能触发 Vue 监听）
+browser-use --session paipai eval "
+  var t = document.querySelector('textarea');
+  t.focus();
+  ['keydown','keypress','keyup'].forEach(function(type) {
+    t.dispatchEvent(new KeyboardEvent(type, {
+      key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+      bubbles: true, cancelable: true
+    }));
+  });
+  'sent';
+"
+
+# 方式2：点击发送按钮
+browser-use --session paipai eval "
+  var sendBtn = document.querySelector('.btn-submit, .submit-btn');
+  if (sendBtn && !sendBtn.classList.contains('disabled')) {
+    sendBtn.click();
+    'CLICKED';
+  } else {
+    'DISABLED_OR_MISSING';
+  }
+"
+```
+
 ---
 
 ## 四、提问与回答提取
+
+> **前提**：确保当前在 **「PaiWork AI工作台」** 模式（不是「Ask PaiPai」）。PaiWork 模式会调用完整 Skills 引擎，生成丰富的研究内容。
+>
+> ```javascript
+> // 检查/切换到 PaiWork 模式
+> var modeItem = document.querySelector('.mode-menu .menu-item:nth-child(2)');
+> if (modeItem && !modeItem.classList.contains('is-active')) modeItem.click();
+> ```
 
 ### 输入内容并发送
 
@@ -1064,48 +1205,88 @@ browser-use --session paipai eval "
 
 **优化方案：直接调用「观点Challenge」技能**（PaiWork 已内置此功能）
 
-从截图可见，PaiWork Skills 列表中已有「观点Challenge」技能（位于「研究」分类下）。调用此技能比手动输入更自动化，可直接将挑战内容作为参数传递。
+PaiWork Skills 树中已有「观点Challenge」技能，位于「研究」文件夹下，`data-node-id="L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU"`。调用此技能比手动输入更自动化。
 
 #### 调用「观点Challenge」技能的流程
 
 ```bash
 export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
 
-# 获取挑战内容（从差异分析生成）
-CHALLENGE_TEXT="对你的油价分析有几点质疑，请逐条回应：
-1. [差异点1：遗漏/错误描述]
-   你[原文怎么说]。但[独立来源]显示[具体数据]，这意味着[影响]。
-   你[遗漏了/夸大了/混淆了]什么？
-2. [差异点2：方向性偏差]
-   你判断[原结论]。但[机构A]认为[不同结论]，因为[逻辑]。
-   你凭什么[在...条件下]就断言[原结论]？
-...
-请逐条回应，并给出你修正后的判断。"
-
-# 调用观点Challenge技能
+# 步骤1：确保在 PaiWork AI工作台模式
 browser-use --session paipai eval "
-  // 找到观点Challenge技能并点击
-  var challengeSkill = document.querySelector('.skill-item:contains(观点Challenge)');
-  if (challengeSkill) {
-    challengeSkill.click();
-    // 等待技能界面加载
-    setTimeout(function() {
-      // 找到技能输入框并填入挑战内容
-      var skillInput = document.querySelector('.skill-input textarea');
-      if (skillInput) {
-        var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        setter.call(skillInput, '$CHALLENGE_TEXT');
-        skillInput.dispatchEvent(new Event('input', { bubbles: true }));
-        // 提交技能
-        var submitBtn = document.querySelector('.skill-submit-btn');
-        if (submitBtn) submitBtn.click();
-      }
-    }, 2000);
-  } else {
-    '观点Challenge技能未找到';
+  var modeItem = document.querySelector('.mode-menu .menu-item:nth-child(2)');
+  if (modeItem && !modeItem.classList.contains('is-active')) modeItem.click();
+  'mode_checked';
+"
+sleep 1
+
+# 步骤2：切换到 Skills 标签页
+browser-use --session paipai eval "
+  var tabs = document.querySelectorAll('.tab-item');
+  for (var i = 0; i < tabs.length; i++) {
+    if (tabs[i].innerText.trim() === 'Skills') { tabs[i].click(); break; }
   }
-" 2>&1
+  'skills_tab';
+"
+sleep 1
+
+# 步骤3：点击「观点Challenge」技能节点（精确 data-node-id 定位）
+browser-use --session paipai eval "
+  var skillNode = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
+  if (skillNode) {
+    skillNode.click();
+    'CLICKED';
+  } else {
+    // 可能"研究"文件夹未展开，先展开它
+    var folder = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
+    if (folder) {
+      folder.click();
+      'NEED_EXPAND_THEN_RETRY';
+    } else {
+      'SKILLS_TAB_NOT_ACTIVE';
+    }
+  }
+"
+sleep 1
+
+# 如果返回 NEED_EXPAND_THEN_RETRY，展开后再次点击
+browser-use --session paipai eval "
+  var skillNode = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
+  if (skillNode) { skillNode.click(); 'CLICKED_AFTER_EXPAND'; }
+  else { 'STILL_NOT_FOUND'; }
+"
+sleep 2
+
+# 步骤4：在 textarea 中输入挑战内容并发送
+# 挑战内容用 JS 文件注入（避免 shell 转义问题）
+cat > /tmp/paipai_challenge.js << 'JSEOF'
+var textarea = document.querySelector('textarea');
+var text = `你的挑战内容，支持多段长文本...`;
+var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(textarea, text);
+textarea.dispatchEvent(new Event('input', { bubbles: true }));
+textarea.dispatchEvent(new Event('change', { bubbles: true }));
+textarea.focus();
+'input_done: ' + textarea.value.length + ' chars';
+JSEOF
+
+browser-use --session paipai eval "$(cat /tmp/paipai_challenge.js)"
+
+# 步骤5：发送（Enter 键完整事件序列）
+browser-use --session paipai eval "
+  var t = document.querySelector('textarea');
+  t.focus();
+  ['keydown','keypress','keyup'].forEach(function(type) {
+    t.dispatchEvent(new KeyboardEvent(type, {
+      key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+      bubbles: true, cancelable: true
+    }));
+  });
+  'sent';
+"
 ```
+
+> **注意**：如果「观点Challenge」技能调用后出现参数输入弹窗（如要求输入公司名/观点），在 textarea 中填入目标公司名即可，然后点击「确定」按钮。
 
 #### 手动输入挑战（备用方案，当技能不可用时）
 
