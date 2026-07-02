@@ -75,7 +75,12 @@ AlphaPai 平台分为两层：**全局导航栏**（左）+ **PaiWork 工作台*
   └── paipai_localstorage.json  # localStorage 数据（含 USER_AUTH_TOKEN）
 ```
 
-### 第一步：尝试自动恢复登录态（无需人工登录）
+### 第一步：启动浏览器并检查登录态
+
+> **核心原则**：保留的 token（localStorage/cookie）**不能保证**登录状态。JWT 可能过期、服务端 session 可能失效。因此：
+> 1. 启动浏览器后 **只检查一次**，不要反复刷新/导航（导航会清空 localStorage）
+> 2. 如果没登录成功，**直接让用户手动登录**，不要尝试注入 localStorage + 刷新
+> 3. 用户登录成功后，用户会告知「已登录」，再开始操作
 
 ```bash
 export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
@@ -84,39 +89,19 @@ mkdir -p ~/.browser-use/cookies
 # 1. 启动浏览器并打开页面
 browser-use --headed --session paipai open https://alphapai-web.rabyte.cn/reading/paiwork
 
-# 2. 如果存在已保存的 cookie，先导入
-if [ -f ~/.browser-use/cookies/paipai_cookies.json ]; then
-  browser-use --session paipai cookies import ~/.browser-use/cookies/paipai_cookies.json
-fi
+# 2. 等待页面加载
+sleep 5
 
-# 3. 如果存在已保存的 localStorage，注入恢复
-if [ -f ~/.browser-use/cookies/paipai_localstorage.json ]; then
-  browser-use --session paipai eval "
-    var data = JSON.parse($(cat ~/.browser-use/cookies/paipai_localstorage.json));
-    for (var key in data) {
-      window.localStorage.setItem(key, data[key]);
-    }
-    'localStorage_restored: ' + Object.keys(data).length + ' keys';
-  "
-  # 刷新页面让恢复的登录态生效
-  browser-use --session paipai open https://alphapai-web.rabyte.cn/reading/paiwork
-fi
-```
-
-### 第二步：检查登录状态
-
-```bash
-sleep 3
+# 3. 检查登录状态（只检查，不修改页面）
 browser-use --session paipai eval "
   var hasTextarea = document.querySelector('textarea');
-  var hasToken = window.localStorage.getItem('USER_AUTH_TOKEN');
-  var tokenValid = hasToken && hasToken.length > 50;
-  hasTextarea && tokenValid ? 'LOGGED_IN' : 'NEED_LOGIN';
+  var token = window.localStorage.getItem('USER_AUTH_TOKEN');
+  hasTextarea ? 'LOGGED_IN' : 'NEED_LOGIN';
 "
 ```
 
-- **返回 `LOGGED_IN`**：自动恢复成功，执行「清除新手引导遮罩」后开始使用
-- **返回 `NEED_LOGIN`**：登录态已过期或不完整，进入第三步
+- **返回 `LOGGED_IN`**：已登录，执行「清除新手引导遮罩」后开始使用
+- **返回 `NEED_LOGIN`**：未登录或登录已过期，**告知用户手动登录**，不要自动刷新或注入 token
 
 ### 清除新手引导遮罩（每次登录后必须执行）
 
@@ -157,10 +142,10 @@ browser-use --session paipai eval "
 
 ### 第三步：人工登录（首次或 token 过期时）
 
-```bash
-# 提示用户在浏览器窗口中手动登录
-# 登录方式：手机号+验证码 或 账号密码
-# 登录完成后用户告知"已登录"
+```
+# 告知用户：
+# "浏览器窗口已打开，显示登录页面。请在浏览器中手动登录（手机号+验证码或账号密码），登录完成后告诉我。"
+# 用户告知"已登录"后，直接开始操作，不要刷新页面。
 ```
 
 ### 第四步：登录成功后保存登录态（关键！）
@@ -172,6 +157,7 @@ browser-use --session paipai eval "
 browser-use --session paipai cookies export ~/.browser-use/cookies/paipai_cookies.json --url https://alphapai-web.rabyte.cn
 
 # 2. 导出 localStorage（含 USER_AUTH_TOKEN）
+# 注意：browser-use eval 输出带 "result: " 前缀，需要清洗
 browser-use --session paipai eval "
   var keys = Object.keys(window.localStorage);
   var data = {};
@@ -179,7 +165,7 @@ browser-use --session paipai eval "
     data[keys[i]] = window.localStorage.getItem(keys[i]);
   }
   JSON.stringify(data);
-" > ~/.browser-use/cookies/paipai_localstorage.json
+" 2>/dev/null | sed 's/^result: //' > ~/.browser-use/cookies/paipai_localstorage.json
 
 # 验证已保存
 cat ~/.browser-use/cookies/paipai_localstorage.json | grep -o 'USER_AUTH_TOKEN' && echo 'TOKEN_SAVED' || echo 'NO_TOKEN'
@@ -188,8 +174,11 @@ cat ~/.browser-use/cookies/paipai_localstorage.json | grep -o 'USER_AUTH_TOKEN' 
 ### Token 有效期说明
 
 - `USER_AUTH_TOKEN` 是 JWT 格式，`exp` 字段表示过期时间
-- 当前观测有效期约 **30 天**（iat 1782917199 → exp 1785509199）
-- 过期后需重新人工登录并重新保存
+- **重要**：保留的 token 不能保证登录状态。即使 token 没过期，以下情况也会导致登录失败：
+  - 服务端 session 失效（服务端踢出）
+  - `browser-use open` 导航时 Vue 路由守卫清空 localStorage
+  - 登录页 JS 主动清理过期 token
+- **因此**：如果检查到 NEED_LOGIN，直接让用户手动登录，不要尝试注入 token + 刷新
 
 ### 完整启动脚本（可直接复制使用）
 
@@ -202,38 +191,19 @@ mkdir -p "$COOKIE_DIR"
 
 # 启动浏览器
 browser-use --headed --session paipai open "$URL"
-sleep 2
+sleep 5
 
-# 恢复 cookie
-if [ -f "$COOKIE_DIR/paipai_cookies.json" ]; then
-  browser-use --session paipai cookies import "$COOKIE_DIR/paipai_cookies.json"
-fi
-
-# 恢复 localStorage
-if [ -f "$COOKIE_DIR/paipai_localstorage.json" ]; then
-  browser-use --session paipai eval "
-    var data = JSON.parse($(cat "$COOKIE_DIR/paipai_localstorage.json"));
-    for (var key in data) { window.localStorage.setItem(key, data[key]); }
-    'restored';
-  "
-  browser-use --session paipai open "$URL"
-  sleep 3
-fi
-
-# 检查登录状态
+# 检查登录状态（只检查一次，不注入 token，不刷新）
 STATUS=$(browser-use --session paipai eval "
   var t = document.querySelector('textarea');
-  var token = window.localStorage.getItem('USER_AUTH_TOKEN');
-  t && token && token.length > 50 ? 'LOGGED_IN' : 'NEED_LOGIN';
-")
+  t ? 'LOGGED_IN' : 'NEED_LOGIN';
+" 2>/dev/null | sed 's/^result: //')
 
 echo "STATUS: $STATUS"
 
 if echo "$STATUS" | grep -q "NEED_LOGIN"; then
-  echo "请手动在浏览器窗口完成登录"
-  echo "登录完成后运行保存命令："
-  echo "  browser-use --session paipai cookies export $COOKIE_DIR/paipai_cookies.json --url https://alphapai-web.rabyte.cn"
-  echo "  browser-use --session paipai eval \"...localStorage dump...\" > $COOKIE_DIR/paipai_localstorage.json"
+  echo "⚠️  请手动在浏览器窗口完成登录"
+  echo "登录完成后告知助手，不要自行刷新页面"
 fi
 ```
 
@@ -1091,6 +1061,53 @@ browser-use --session paipai eval "
 > **输出**：生成结构化的差异点列表，每条标注来源。
 
 ### 9.4 Phase 3 — 挑战生成与发送
+
+**优化方案：直接调用「观点Challenge」技能**（PaiWork 已内置此功能）
+
+从截图可见，PaiWork Skills 列表中已有「观点Challenge」技能（位于「研究」分类下）。调用此技能比手动输入更自动化，可直接将挑战内容作为参数传递。
+
+#### 调用「观点Challenge」技能的流程
+
+```bash
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+
+# 获取挑战内容（从差异分析生成）
+CHALLENGE_TEXT="对你的油价分析有几点质疑，请逐条回应：
+1. [差异点1：遗漏/错误描述]
+   你[原文怎么说]。但[独立来源]显示[具体数据]，这意味着[影响]。
+   你[遗漏了/夸大了/混淆了]什么？
+2. [差异点2：方向性偏差]
+   你判断[原结论]。但[机构A]认为[不同结论]，因为[逻辑]。
+   你凭什么[在...条件下]就断言[原结论]？
+...
+请逐条回应，并给出你修正后的判断。"
+
+# 调用观点Challenge技能
+browser-use --session paipai eval "
+  // 找到观点Challenge技能并点击
+  var challengeSkill = document.querySelector('.skill-item:contains(观点Challenge)');
+  if (challengeSkill) {
+    challengeSkill.click();
+    // 等待技能界面加载
+    setTimeout(function() {
+      // 找到技能输入框并填入挑战内容
+      var skillInput = document.querySelector('.skill-input textarea');
+      if (skillInput) {
+        var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(skillInput, '$CHALLENGE_TEXT');
+        skillInput.dispatchEvent(new Event('input', { bubbles: true }));
+        // 提交技能
+        var submitBtn = document.querySelector('.skill-submit-btn');
+        if (submitBtn) submitBtn.click();
+      }
+    }, 2000);
+  } else {
+    '观点Challenge技能未找到';
+  }
+" 2>&1
+```
+
+#### 手动输入挑战（备用方案，当技能不可用时）
 
 将差异点结构化为**逐条质疑**，每条包含：
 1. PaiPai 原文怎么说的（引述）
