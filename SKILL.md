@@ -1,12 +1,14 @@
 ---
 title: "派派Agent交互"
-summary: "与 alphapai-web.rabyte.cn 平台全功能交互——支持全平台模块导航(首页/PaiPai/PaiWork/云盘/日历/会议/研报/转记/翻译/公告/社媒)、人工登录介入、工作区导航、Skills定向调用、自动输入提问、等待并提取回答"
+summary: "与 alphapai-web.rabyte.cn 平台全功能交互——支持全平台模块导航(首页/PaiPai/PaiWork/云盘/日历/会议/研报/转记/翻译/公告/社媒)、人工登录介入、工作区导航、Skills定向调用、自动输入提问、等待并提取回答、同步挑战模式(多源交叉验证+自动挑战PaiPai)"
 read_when:
   - 需要操作 alphapai-web.rabyte.cn 上的任何功能模块
   - 需要在 AlphaPai 平台模块间导航切换
   - 需要人工先登录后自动操作的场景
   - 需要浏览/选择 PaiWork Skills 广场中的技能
   - 需要定向化调用特定 Skill 向 PaiPai 提问
+  - 需要对投研/宏观/事件类话题做多源交叉验证并挑战PaiPai的观点
+  - 需要并行搜索独立信息源与PaiPai对话进行差异分析
 ---
 
 # 派派Agent交互技能
@@ -979,6 +981,333 @@ browser-use --session paipai eval "
   all.join('\\n');
 "
 ```
+
+---
+
+## 九、同步挑战模式（Cross-Verification & Challenge）
+
+> **核心思想**：在向 PaiPai 提问的**同时**，自己用 WebSearch 并行搜索多源独立信息，等 PaiPai 回答后对两者差异点形成挑战，再将挑战内容发回 PaiPai 让其回应。最终产出经过交叉验证的高质量结论。
+
+### 9.0 适用场景
+
+- 投研分析（油价趋势、行业景气度、公司基本面判断等）
+- 宏观经济展望（GDP、利率、汇率走势等）
+- 事件影响评估（地缘冲突、政策变化、技术突破等）
+- 任何需要多源交叉验证、且 PaiPai 可能存在信息盲区的话题
+
+> **判断标准**：如果话题涉及「预测/展望/趋势判断」且有多个权威信源（IEA/中金/EIA/券商研报等），就应该使用同步挑战模式。
+
+### 9.1 流程总览
+
+```
+用户提问
+  ├── 线程A：发送问题给 PaiPai → 轮询等待回答 → 提取回答
+  ├── 线程B（并行）：WebSearch 多源搜索 → WebFetch 深度提取 → 形成独立观点
+  ↓ 汇合
+  差异分析：对比两方观点，找出分歧点/遗漏点/错误点
+  ↓
+  挑战生成：将差异点结构化为逐条质疑
+  ↓
+  挑战发送：把质疑发给 PaiPai → 轮询等待回应 → 提取回应
+  ↓
+  最终报告：原始观点 + 独立发现 + PaiPai修正 + 修正后结论
+```
+
+### 9.2 Phase 1 — 双线并行（提问 + 搜索）
+
+**在向 PaiPai 发送问题的同时**（不等它回答完），立即启动 WebSearch。这是因为 PaiPai 的深度回答通常需要 60-120 秒，这段时间用来做自己的研究。
+
+#### 线 A：发送问题给 PaiPai
+
+按「四、提问与回答提取」的标准流程操作。关键命令：
+
+```bash
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+
+# 输入问题（用文件注入长文本，避免 shell 转义问题）
+cat > /tmp/paipai_input.js << 'JSEOF'
+var textarea = document.querySelector('textarea');
+var text = `你的问题内容`;
+var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(textarea, text);
+textarea.dispatchEvent(new Event('input', { bubbles: true }));
+textarea.dispatchEvent(new Event('change', { bubbles: true }));
+textarea.focus();
+'input_done: ' + textarea.value.length + ' chars';
+JSEOF
+
+browser-use --session paipai eval "$(cat /tmp/paipai_input.js)" 2>&1
+
+# 用 Enter 发送
+browser-use --session paipai eval "
+  var textarea = document.querySelector('textarea');
+  textarea.focus();
+  var ev = new KeyboardEvent('keydown', {
+    key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+    bubbles: true, cancelable: true
+  });
+  textarea.dispatchEvent(ev);
+  'sent';
+" 2>&1
+```
+
+#### 线 B：WebSearch 并行搜索（与 PaiPai 生成同时进行）
+
+**搜索策略**——每次至少 3-5 组关键词，覆盖不同角度：
+
+```
+第1组：核心事实核验（最新数据/价格/事件）
+第2组：权威机构预测（IEA/EIA/OECD/IMF/央行等）
+第3组：券商研报观点（中金/中信/华泰/申万等）
+第4组：反方观点/风险因素（bear case）
+第5组：中文+英文双语搜索（扩大覆盖面）
+```
+
+**搜索技巧**：
+- 用 `query_keyword_groups` 参数一次搜索多组关键词（避免多次往返）
+- 优先搜索最新的（当天/本周）新闻和分析
+- **同时搜索中英文**——中文找券商/国内机构观点，英文找 IEA/EIA/Wall Street Journal 等
+
+**深度提取**——对关键搜索结果用 WebFetch 获取全文：
+- 机构研报全文（中金、华泰等公众号文章）
+- 权威数据源（IEA/EIA 月报、OPEC 月报等）
+- 实时数据页面（Trading Economics、金投网等）
+
+### 9.3 Phase 2 — 差异分析
+
+拿到 PaiPai 的回答和自己的搜索结果后，逐维度对比：
+
+| 分析维度 | 检查项 |
+|---------|--------|
+| **事实性错误** | 数据/日期/事件是否准确？引用的机构预测是否正确？|
+| **重大遗漏** | 是否遗漏了关键变量/事件/结构性变化？|
+| **方向性偏差** | 结论方向是否与主流机构一致？是否过度乐观/悲观？|
+| **时间错配** | 是否将长期趋势与短期现实混淆？（如把长期过剩等同于当前过剩）|
+| **框架过时** | 引用的分析框架是否仍然有效？（如 OPEC+ 旧框架在成员退出后失效）|
+| **选择性引用** | 是否只引用了支持自己结论的数据，忽略了反面证据？|
+| **量级低估** | 是否知道方向但严重低估了量级？（如"需求疲软"vs"需求下降40%"）|
+| **确定性偏差** | 是否将不确定情景当作确定性事件？（如"可能过剩"说成"确定性过剩"）|
+
+> **输出**：生成结构化的差异点列表，每条标注来源。
+
+### 9.4 Phase 3 — 挑战生成与发送
+
+将差异点结构化为**逐条质疑**，每条包含：
+1. PaiPai 原文怎么说的（引述）
+2. 独立来源怎么说（引用具体数据和机构）
+3. 质疑什么（遗漏/错误/偏差类型）
+4. 要求回应
+
+#### 挑战文本模板
+
+```markdown
+对你的[话题]分析有几点质疑，请逐条回应：
+
+1. [差异点1：遗漏/错误描述]
+   你[原文怎么说]。但[独立来源]显示[具体数据]，这意味着[影响]。
+   你[遗漏了/夸大了/混淆了]什么？
+
+2. [差异点2：方向性偏差]
+   你判断[原结论]。但[机构A]认为[不同结论]，因为[逻辑]。
+   你凭什么[在...条件下]就断言[原结论]？
+
+...
+
+请逐条回应，并给出你修正后的判断。
+```
+
+#### 发送挑战（长文本用 JS 文件注入）
+
+```bash
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+
+# 用 heredoc 写入 JS 文件（避免 shell 转义问题）
+cat > /tmp/paipai_challenge.js << 'JSEOF'
+var textarea = document.querySelector('textarea');
+var text = `你的挑战内容，支持多段长文本`;
+var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(textarea, text);
+textarea.dispatchEvent(new Event('input', { bubbles: true }));
+textarea.dispatchEvent(new Event('change', { bubbles: true }));
+textarea.focus();
+'input_done: ' + textarea.value.length + ' chars';
+JSEOF
+
+browser-use --session paipai eval "$(cat /tmp/paipai_challenge.js)" 2>&1
+
+# Enter 发送
+browser-use --session paipai eval "
+  var textarea = document.querySelector('textarea');
+  textarea.focus();
+  textarea.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true
+  }));
+  'sent';
+" 2>&1
+```
+
+#### 轮询等待回应（挑战类问题通常更长，需 90-180 秒）
+
+```bash
+for i in $(seq 1 36); do
+  sleep 5
+  STATUS=$(browser-use --session paipai eval "
+    var body = document.body.innerText;
+    var generating = body.includes('马不停蹄') || body.includes('努力思考') || body.includes('思考中');
+    var done = body.includes('搞定回答') || body.includes('复制');
+    generating ? 'GENERATING' : (done ? 'DONE' : 'UNKNOWN');
+  " 2>/dev/null | sed 's/^result: //')
+  echo "[$((i*5))s] $STATUS"
+  if [ "$STATUS" = "DONE" ]; then echo "=== DONE ==="; break; fi
+done
+```
+
+#### 提取 PaiPai 回应
+
+```bash
+browser-use --session paipai eval "
+  var chatArea = document.querySelector('.work-content-chat');
+  var blocks = chatArea.querySelectorAll('p, .text-content');
+  var texts = [];
+  blocks.forEach(function(b) {
+    var t = b.innerText.trim();
+    if (t.length > 5) texts.push(t);
+  });
+  texts.join('\n---\n').substring(0, 8000);
+" 2>&1
+```
+
+### 9.5 Phase 4 — 最终报告生成
+
+将整个交叉验证过程结构化为报告，包含以下部分：
+
+```markdown
+# [话题] 交叉验证报告
+
+## 一、PaiPai 原始观点
+[PaiPai 第一轮回答的核心结论]
+
+## 二、独立研究发现
+[WebSearch 发现的关键数据/观点，标注来源]
+
+## 三、差异分析
+[逐条列出 PaiPai 与独立研究的差异]
+
+## 四、挑战与 PaiPai 回应
+[质疑内容 + PaiPai 逐条回应 + 是否认错]
+
+## 五、修正后结论
+[双方修正后的共识判断]
+```
+
+### 9.6 完整工作流示例：油价趋势分析
+
+以下是一次完整的同步挑战流程（实际执行过）：
+
+```bash
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+
+# === STEP 1: 向 PaiPai 发送问题 ===
+cat > /tmp/paipai_input.js << 'JSEOF'
+var textarea = document.querySelector('textarea');
+var text = `今天油价趋势如何？请分析下最新的原油价格走势`;
+var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(textarea, text);
+textarea.dispatchEvent(new Event('input', { bubbles: true }));
+textarea.dispatchEvent(new Event('change', { bubbles: true }));
+textarea.focus();
+'input_done';
+JSEOF
+browser-use --session paipai eval "$(cat /tmp/paipai_input.js)" 2>&1
+browser-use --session paipai eval "
+  var t = document.querySelector('textarea'); t.focus();
+  t.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
+  'sent';
+" 2>&1
+
+# === STEP 2: 同时用 WebSearch 搜索（不等 PaiPai 回答完）===
+# → WebSearch: "oil price July 2026 crude oil trend"
+# → WebSearch: "IEA oil market report June 2026 demand supply"
+# → WebSearch: "中金 原油 2026下半年展望"
+# → WebSearch: "阿联酋退出OPEC 原油出口 2026"
+# → WebFetch: IEA 6月报、中金下半年展望全文
+
+# === STEP 3: 轮询等待 PaiPai 回答完成 ===
+for i in $(seq 1 24); do
+  sleep 5
+  STATUS=$(browser-use --session paipai eval "
+    var b = document.body.innerText;
+    var g = b.includes('马不停蹄')||b.includes('努力思考');
+    var d = b.includes('搞定回答')||b.includes('复制');
+    g?'GENERATING':(d?'DONE':'UNKNOWN');
+  " 2>/dev/null | sed 's/^result: //')
+  echo "[$((i*5))s] $STATUS"
+  [ "$STATUS" = "DONE" ] && break
+done
+
+# === STEP 4: 提取 PaiPai 回答 ===
+browser-use --session paipai eval "
+  var c = document.querySelector('.work-content-chat');
+  var bs = c.querySelectorAll('p,.text-content');
+  var ts = []; bs.forEach(function(b){var t=b.innerText.trim();if(t.length>5)ts.push(t);});
+  ts.join('\n').substring(0, 6000);
+" 2>&1
+
+# === STEP 5: 差异分析 + 生成挑战文本 ===
+# （基于对比结果，用 JS 文件注入挑战内容）
+cat > /tmp/paipai_challenge.js << 'JSEOF'
+var textarea = document.querySelector('textarea');
+var text = `对你的油价分析有几点质疑，请逐条回应：
+1. [差异点1]...
+2. [差异点2]...
+请逐条回应，并给出你修正后的油价判断。`;
+var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(textarea, text);
+textarea.dispatchEvent(new Event('input', { bubbles: true }));
+textarea.dispatchEvent(new Event('change', { bubbles: true }));
+textarea.focus();
+'input_done';
+JSEOF
+browser-use --session paipai eval "$(cat /tmp/paipai_challenge.js)" 2>&1
+
+# Enter 发送
+browser-use --session paipai eval "
+  var t=document.querySelector('textarea');t.focus();
+  t.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
+  'sent';
+" 2>&1
+
+# === STEP 6: 轮询等待 PaiPai 回应挑战 ===
+for i in $(seq 1 36); do
+  sleep 5
+  STATUS=$(browser-use --session paipai eval "
+    var b=document.body.innerText;
+    var g=b.includes('马不停蹄')||b.includes('努力思考');
+    var d=b.includes('搞定回答')||b.includes('复制');
+    g?'GENERATING':(d?'DONE':'UNKNOWN');
+  " 2>/dev/null|sed 's/^result: //')
+  echo "[$((i*5))s] $STATUS"
+  [ "$STATUS" = "DONE" ] && break
+done
+
+# === STEP 7: 提取 PaiPai 回应 + 生成最终报告 ===
+browser-use --session paipai eval "
+  var c=document.querySelector('.work-content-chat');
+  var bs=c.querySelectorAll('p,.text-content');
+  var ts=[];bs.forEach(function(b){var t=b.innerText.trim();if(t.length>5)ts.push(t);});
+  ts.join('\n').substring(0,8000);
+" 2>&1
+```
+
+### 9.7 关键要点
+
+1. **并行不是串行**：PaiPai 生成答案通常需要 60-120 秒，这段时间必须用来做自己的 WebSearch，不要干等
+2. **挑战要有具体数据**：不要泛泛质疑"你不全面"，要给出 `机构名+数据+日期` 的具体证据
+3. **逐条编号**：用数字编号让 PaiPai 能逐条回应，避免遗漏
+4. **长文本用 JS 文件注入**：挑战内容通常较长，用 `cat > /tmp/xxx.js << 'JSEOF'` 写入文件再注入，避免 shell 转义
+5. **挑战后轮询时间加倍**：回应挑战比首次回答更长（需对比多源），等待时间设 180 秒
+6. **PaiPai 通常会认错**：当有确凿的多源证据时，PaiPai 会承认遗漏/错误并修正判断——这正是交叉验证的价值所在
+7. **保存完整记录**：原始观点 → 独立发现 → 挑战 → 修正后的结论，整个链条都有价值
 
 ---
 
