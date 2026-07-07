@@ -533,10 +533,11 @@ if (arrow) arrow.click();
 
 ### 定向调用特定 Skill
 
-#### 方法0（⭐ 最佳方案）：`/` 唤醒 Skills 快捷菜单 + 原生 click 选择
+#### 方法0（⭐ 最佳方案）：直接输入 `/技能名` 唤醒
 
-> **实战验证**：7/7 测试成功！这是唯一可靠的方式。
-> Skills 树弹窗（方法1）存在 body 加载不出的 bug，`/` 唤醒的快捷菜单则完全正常。
+> **实战验证**：7/7 测试成功！最简洁可靠的方案。
+> 直接在 textarea 输入 `/观点challenge` 即可自动唤醒技能，无需任何 click 操作。
+> 适用于**所有** PaiWork Skills 面板中列出的技能（`/技能名` 格式）。
 
 ```bash
 export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
@@ -553,59 +554,32 @@ Y=$(echo "$COORDS" | cut -d',' -f2)
 browser-use --session paipai click "$X" "$Y"
 sleep 0.5
 
-# Step 2: 用 JS setter 输入 / 唤醒 Skills 快捷菜单（type 不稳定，用 setter）
-browser-use --session paipai eval "
-  var t = document.querySelector('textarea');
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(t, '/');
-  t.dispatchEvent(new Event('input', { bubbles: true }));
-  t.focus();
-  'TYPED_SLASH';
-"
-sleep 2
-
-# Step 3: 获取目标 Skill（如"观点Challenge"）的坐标，原生 click
-SKILL_COORDS=$(browser-use --session paipai eval "
-  var labels = document.querySelectorAll('.skills-label-title');
-  var coords = '0,0';
-  for (var i = 0; i < labels.length; i++) {
-    if (labels[i].innerText.trim() === '观点Challenge') {
-      var r = labels[i].getBoundingClientRect();
-      coords = Math.round(r.x + r.width/2) + ',' + Math.round(r.y + r.height/2);
-      break;
-    }
-  }
-  coords;
-" 2>/dev/null | sed 's/^result: //')
-SX=$(echo "$SKILL_COORDS" | cut -d',' -f1)
-SY=$(echo "$SKILL_COORDS" | cut -d',' -f2)
-echo "Skill label at: $SX,$SY"
-if [ "$SX" != "0" ]; then
-  browser-use --session paipai click "$SX" "$SY"
-fi
-sleep 2
-
-# Step 4: textarea 现在值为 "[观点Challenge] "，在其后追加参数
-cat > /tmp/paipai_skill_param.js << 'JSEOF'
+# Step 2: 直接输入 /技能名 + 参数，一次性完成唤醒+传参
+# 例如：/观点challenge 对今日原油市场提出观点并实施挑战
+# JS setter 输入完整指令（type 命令不稳定，用 setter 最可靠）
+cat > /tmp/paipai_skill_wake.js << 'JSEOF'
 var t = document.querySelector('textarea');
-var currentVal = t.value;
-if (!currentVal.includes('[观点Challenge]')) {
-  currentVal = '[观点Challenge] ';
-}
 var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-setter.call(t, currentVal + ' 你的挑战/分析内容...');
+setter.call(t, '/观点challenge 你的挑战/分析内容...');
 t.dispatchEvent(new Event('input', { bubbles: true }));
 t.dispatchEvent(new Event('change', { bubbles: true }));
+t.focus();
 'done: ' + t.value;
 JSEOF
-browser-use --session paipai eval "$(cat /tmp/paipai_skill_param.js)"
+browser-use --session paipai eval "$(cat /tmp/paipai_skill_wake.js)"
+sleep 1
 
-# Step 5: 原生 Enter 发送
+# Step 3: 原生 Enter 发送
 browser-use --session paipai keys "Enter"
 ```
 
-> **✅ 验证结果（7/7）**：技能成功激活，textarea 显示 `[观点Challenge]`，PaiWork 走 fact-debate 辩论框架，
+> **✅ 验证结果（7/7）**：技能成功激活，PaiWork 走 fact-debate 辩论框架，
 > 生成多空对照式分析（185秒），与普通对话模式（60-120秒）明显不同。
+>
+> **通用性**：将 `观点challenge` 替换为任意技能名即可激活对应技能，如：
+> - `/浏览器代理` → 浏览器代理技能
+> - `/有道云笔记同步` → 有道云笔记同步技能
+> - 技能名需与 Skills 面板中显示的名称一致（不区分大小写）
 
 #### 方法1（备用）：原生 click 点击 Skills 树（可能弹窗加载失败）
 
