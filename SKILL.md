@@ -27,6 +27,95 @@ read_when:
 export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
 ```
 
+## ⚠️ 核心规则：优先使用 browser-use 原生命令，而非 eval + JS .click()
+
+> **实战教训**：Alpha派是 Vue 3 应用，Vue 组件的事件监听器挂载在虚拟 DOM 上，JS 合成的 `.click()` / `.dispatchEvent()` 经常**无法触发** Vue 的事件回调。具体表现为：
+> - 点击导航菜单项 → 不切换
+> - 点击 Skills 树节点 → 弹窗空白 / 加载不出来
+> - 点击发送按钮 → 不发送
+> - 输入文本后 dispatchEvent('input') → 偶尔不触发 Vue 双向绑定
+>
+> **根本原因**：CDP（Chrome DevTools Protocol）的 `Runtime.evaluate` 执行的 JS 代码运行在页面上下文中，但合成事件不被 Vue 视为"可信事件"（`event.isTrusted = false`），某些组件库（Element Plus、自定义组件）会忽略非可信事件。
+
+### browser-use 原生命令清单（必须优先使用）
+
+| 命令 | 用途 | 示例 |
+|------|------|------|
+| `browser-use --session paipai state` | **获取页面所有可交互元素列表**（每个元素带数字索引） | `browser-use --session paipai state` |
+| `browser-use --session paipai click <index>` | **真实鼠标点击**（通过元素索引） | `browser-use --session paipai click 42` |
+| `browser-use --session paipai click <x> <y>` | **坐标点击**（通过屏幕坐标） | `browser-use --session paipai click 350 280` |
+| `browser-use --session paipai type "文字"` | **真实键盘输入**（覆盖式） | `browser-use --session paipai type "分析原油趋势"` |
+| `browser-use --session paipai input "文字"` | **清空再输入** | `browser-use --session paipai input "恒逸石化"` |
+| `browser-use --session paipai keys "Enter"` | **发送键盘按键** | `browser-use --session paipai keys "Enter"` |
+| `browser-use --session paipai keys "Control+a"` | 组合键 | `browser-use --session paipai keys "Control+a"` |
+| `browser-use --session paipai hover <index>` | 鼠标悬停 | `browser-use --session paipai hover 15` |
+| `browser-use --session paipai dblclick <index>` | 双击 | `browser-use --session paipai dblclick 8` |
+| `browser-use --session paipai scroll down 3` | 向下滚动 | `browser-use --session paipai scroll down 3` |
+
+### 标准操作流程（替代旧的 eval + .click() 模式）
+
+#### 步骤 1：获取元素索引
+```bash
+export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
+# 获取页面所有可交互元素（每个元素有一个数字索引）
+browser-use --session paipai state
+```
+> 输出中每个元素格式：`[index] <tag> text="..."`，找到目标元素的索引号。
+
+#### 步骤 2：用索引真实点击
+```bash
+# 例如观点Challenge在索引 [42]
+browser-use --session paipai click 42
+```
+
+#### 步骤 3：用真实键盘输入
+```bash
+# 点击 textarea 后，用真实键盘输入
+browser-use --session paipai type "分析今日原油市场趋势"
+# 或先清空再输入
+browser-use --session paipai input "分析今日原油市场趋势"
+```
+
+#### 步骤 4：用真实键盘发送
+```bash
+browser-use --session paipai keys "Enter"
+```
+
+### 何时仍可用 eval？
+
+| 场景 | 方法 | 原因 |
+|------|------|------|
+| **读取页面内容**（提取回答） | `eval` | 只读操作不涉及事件触发 |
+| **检查状态**（登录态、模式、DOM 结构） | `eval` | 只读操作 |
+| **截图定位辅助** | `eval` | 获取元素坐标后用 `click x y` |
+| **导航菜单切换** | `click <index>` ✅ | Vue 菜单项需真实事件 |
+| **Skills 树节点点击** | `click <index>` ✅ | Vue 树组件需真实事件 |
+| **文本输入** | `type` / `input` ✅ | Vue 双向绑定需真实键盘 |
+| **发送消息** | `keys "Enter"` ✅ | Vue 发送监听需真实键盘 |
+| **发送按钮点击** | `click <index>` ✅ | 需真实鼠标事件 |
+
+### eval 辅助定位元素坐标（配合 click x y 使用）
+
+当 `state` 输出的索引列表不够精确时，用 eval 获取坐标再用原生命令点击：
+
+```bash
+# 用 eval 获取目标元素的中心坐标
+COORDS=$(browser-use --session paipai eval "
+  var el = document.querySelector('[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
+  if (!el) { '0 0'; }
+  else {
+    var rect = el.getBoundingClientRect();
+    Math.round(rect.x + rect.width/2) + ' ' + Math.round(rect.y + rect.height/2);
+  }
+" 2>/dev/null | sed 's/^result: //')
+echo "Coordinates: $COORDS"
+
+# 用坐标真实点击
+browser-use --session paipai click $COORDS
+```
+
+---
+
 ## 页面布局概览
 
 AlphaPai 平台分为两层：**全局导航栏**（左）+ **PaiWork 工作台**（右）。
@@ -47,7 +136,7 @@ AlphaPai 平台分为两层：**全局导航栏**（左）+ **PaiWork 工作台*
 | **公告** | `#aside-menu-announcement` | `.icon-gonggao1` | 公告信息 |
 | **社媒** | `#aside-menu-social-media` | `.icon-shemei` | 社交媒体 |
 
-> **导航方式**：`document.querySelector('#aside-menu-xxx').click()` — 使用 ID 比 class 更稳定，不受样式变更影响。
+> **导航方式**：优先使用 `browser-use click <index>`（通过 `state` 获取索引）；备选 `eval` 获取坐标后 `click x y`。仅用于读取时才用 `eval`。
 > **当前选中模块**：带 `.is-active` 类的 `el-menu-item`。
 > **导航容器**：`.app-left-side .app-nav .el-menu`
 
@@ -444,99 +533,120 @@ if (arrow) arrow.click();
 
 ### 定向调用特定 Skill
 
-#### 方法1（推荐）：通过 data-node-id 点击 Skills 树中的技能
+#### 方法1（推荐）：原生 `browser-use click` 点击 Skills 树中的技能
+
+> **⚠️ 关键**：Vue 树组件**不响应 JS `.click()` 合成事件**，必须用 `browser-use click` 触发真实 CDP 鼠标事件！
 
 ```bash
-# 确保在 PaiWork AI工作台模式 + Skills 标签页
-# 然后点击特定 Skill（如"观点Challenge"）
-browser-use --session paipai eval "
-  // 1. 切换到 Skills 标签页
+# Step 1: 确保在 PaiWork AI工作台模式
+# Step 2: 用 eval 获取元素坐标（eval 只用于"读"）
+COORDS=$(browser-use --session paipai eval "
+  // 先切换到 Skills 标签页
   var tabs = document.querySelectorAll('.tab-item');
   for (var i = 0; i < tabs.length; i++) {
     if (tabs[i].innerText.trim() === 'Skills') { tabs[i].click(); break; }
   }
-"
+  sleep_or_wait: 'tab_switched';
+" 2>/dev/null | sed 's/^result: //')
 sleep 1
 
-# 2. 点击目标 Skill 的 node-row
+# Step 3: 展开"研究"文件夹（如果尚未展开）
 browser-use --session paipai eval "
-  var skillNode = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
-  if (skillNode) {
-    skillNode.click();
-    'CLICKED: 观点Challenge';
-  } else {
-    // 可能需要先展开"研究"文件夹
-    var researchFolder = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
-    if (researchFolder) {
-      researchFolder.click();
-      'NEED_EXPAND_RESEARCH';
-    } else {
-      'SKILLS_TAB_NOT_ACTIVE';
-    }
+  var researchFolder = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
+  if (researchFolder) {
+    researchFolder.getAttribute('class');  // 仅检查，不click
+  } else { 'NO_RESEARCH_FOLDER'; }
+" 2>/dev/null
+
+# 获取研究文件夹坐标，用原生 click 展开
+COORDS=$(browser-use --session paipai eval "
+  var el = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
+  if (!el) { '0 0'; }
+  else {
+    var rect = el.getBoundingClientRect();
+    Math.round(rect.x + rect.width/2) + ' ' + Math.round(rect.y + rect.height/2);
   }
-"
+" 2>/dev/null | sed 's/^result: //')
+echo "Research folder coords: $COORDS"
+browser-use --session paipai click $COORDS   # ← 真实 CDP 鼠标点击！
 sleep 2
 
-# 3. Skill 选中后，在 textarea 中输入参数并提交
-browser-use --session paipai eval "
-  var t = document.querySelector('textarea');
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(t, '恒逸石化');
-  t.dispatchEvent(new Event('input', { bubbles: true }));
-  t.dispatchEvent(new Event('change', { bubbles: true }));
-  'skill_param_set';
-"
-```
-
-#### 方法2：在 PaiWork 输入框中引用 Skill 名称
-
-```bash
-# 直接在提问中引用 Skill 名称（PaiWork 会自动匹配）
-browser-use --session paipai eval "
-  var t = document.querySelector('textarea');
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(t, '使用「公司一页纸」技能分析北方华创');
-  t.dispatchEvent(new Event('input', { bubbles: true }));
-"
-```
-
-#### 方法3：输入公司名/代码（PaiWork 自动匹配"公司一页纸"）
-
-```bash
-browser-use --session paipai eval "
-  var t = document.querySelector('textarea');
-  var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-  setter.call(t, '北方华创');
-  t.dispatchEvent(new Event('input', { bubbles: true }));
-"
-```
-
-#### 发送（Enter 键或点击发送按钮）
-
-```bash
-# 方式1：Enter 键（需完整事件序列才能触发 Vue 监听）
-browser-use --session paipai eval "
-  var t = document.querySelector('textarea');
-  t.focus();
-  ['keydown','keypress','keyup'].forEach(function(type) {
-    t.dispatchEvent(new KeyboardEvent(type, {
-      key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-      bubbles: true, cancelable: true
-    }));
-  });
-  'sent';
-"
-
-# 方式2：点击发送按钮
-browser-use --session paipai eval "
-  var sendBtn = document.querySelector('.btn-submit, .submit-btn');
-  if (sendBtn && !sendBtn.classList.contains('disabled')) {
-    sendBtn.click();
-    'CLICKED';
-  } else {
-    'DISABLED_OR_MISSING';
+# Step 4: 获取目标 Skill 坐标，用原生 click 点击
+COORDS=$(browser-use --session paipai eval "
+  var el = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
+  if (!el) { '0 0'; }
+  else {
+    var rect = el.getBoundingClientRect();
+    Math.round(rect.x + rect.width/2) + ' ' + Math.round(rect.y + rect.height/2);
   }
-"
+" 2>/dev/null | sed 's/^result: //')
+echo "Skill coords: $COORDS"
+if [ "$COORDS" != "0 0" ]; then
+  browser-use --session paipai click $COORDS   # ← 真实 CDP 鼠标点击！
+  sleep 2
+  echo "Skill clicked natively"
+fi
+```
+
+**简写模式（通过 state 索引点击）**：
+```bash
+# browser-use state 返回带索引的元素列表
+browser-use --session paipai state 2>&1 | grep -i "challenge\|挑战\|辩论"
+# 找到索引如 [42]，然后：
+browser-use --session paipai click 42    # ← 直接按索引点击
+```
+
+#### 方法2：用 browser-use type 输入文本（原生键盘）
+
+```bash
+# 先点击 textarea 聚焦（原生 click）
+COORDS=$(browser-use --session paipai eval "
+  var el = document.querySelector('textarea');
+  if (!el) { '0 0'; }
+  else { var r = el.getBoundingClientRect();
+    Math.round(r.x + r.width/2) + ' ' + Math.round(r.y + r.height/2); }
+" 2>/dev/null | sed 's/^result: //')
+browser-use --session paipai click $COORDS   # 聚焦 textarea
+sleep 0.5
+
+# 用原生键盘输入（短文本）
+browser-use --session paipai type "北方华创"
+
+# 长文本仍用 JS setter（type 对超长文本不稳定）
+cat > /tmp/paipai_input.js << 'JSEOF'
+var t = document.querySelector('textarea');
+var setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+setter.call(t, `长文本内容...`);
+t.dispatchEvent(new Event('input', { bubbles: true }));
+'done';
+JSEOF
+browser-use --session paipai eval "$(cat /tmp/paipai_input.js)"
+```
+
+#### 发送（推荐用原生 keys Enter）
+
+```bash
+# ✅ 方式1（首选）：原生键盘 Enter —— 触发真实键盘事件
+browser-use --session paipai keys "Enter"
+
+# ✅ 方式2：原生 click 发送按钮
+# 先获取发送按钮坐标
+COORDS=$(browser-use --session paipai eval "
+  var btn = document.querySelector('.submit-btn, .btn-submit, .icon-fasong1')?.closest('div,span,button')
+           || document.querySelector('.submit-btn, .btn-submit');
+  if (!btn) { '0 0'; }
+  else { var r = btn.getBoundingClientRect();
+    Math.round(r.x + r.width/2) + ' ' + Math.round(r.y + r.height/2); }
+" 2>/dev/null | sed 's/^result: //')
+if [ "$COORDS" != "0 0" ]; then
+  browser-use --session paipai click $COORDS
+fi
+
+# ⚠️ 备用（不推荐）：JS 合成 Enter 事件（对 Vue 可能无效）
+# browser-use --session paipai eval "var t=document.querySelector('textarea');
+#   t.focus(); ['keydown','keypress','keyup'].forEach(function(type) {
+#     t.dispatchEvent(new KeyboardEvent(type, {key:'Enter',code:'Enter',keyCode:13,bubbles:true}));
+#   });"
 ```
 
 ---
@@ -1231,24 +1341,25 @@ browser-use --session paipai eval "
 
 ### 9.4 Phase 3 — 挑战生成与发送
 
-> **⚠️ 强制规则：挑战必须通过「观点Challenge」技能发起，禁止直接在 textarea 输入挑战文本！**
+> **⚠️ 强制规则1：挑战必须通过「观点Challenge」技能发起，禁止直接在 textarea 输入挑战文本！**
 >
 > 直接在输入框输入挑战文本只会触发 PaiWork 的普通对话模式，不会走 Challenge 技能的专门 pipeline
 > （多角度分析框架、结构化质疑逻辑、系统性反驳评估），挑战效果大打折扣。
 >
-> **正确做法**：先在 Skills 树中点击「观点Challenge」技能节点激活该技能，再在 textarea 输入参数后发送。
-> 只有这样 PaiWork 才会启用 Challenge 专用 prompt 模板和逻辑链路。
+> **⚠️ 强制规则2：Skills 树点击必须用 `browser-use click`（原生 CDP 鼠标事件），禁止用 `eval` + JS `.click()`！**
+>
+> Vue 树组件不响应 JS 合成 `.click()` 事件，会导致弹窗加载失败、技能无法激活。
 
-**首选方案：调用「观点Challenge」技能**（PaiWork 已内置此功能）
+**首选方案：用原生 click 调用「观点Challenge」技能**
 
-PaiWork Skills 树中已有「观点Challenge」技能，位于「研究」文件夹下，`data-node-id="L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU"`。调用此技能比手动输入更自动化。
+PaiWork Skills 树中已有「观点Challenge」技能，位于「研究」文件夹下，`data-node-id="L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU"`。
 
-#### 调用「观点Challenge」技能的流程
+#### 调用「观点Challenge」技能的流程（全部使用原生命令）
 
 ```bash
 export PATH="$HOME/.browser-use/bin:$HOME/.browser-use-env/bin:$PATH"
 
-# 步骤1：确保在 PaiWork AI工作台模式
+# 步骤1：确保在 PaiWork AI工作台模式（用 eval 检查模式即可，模式切换也可用 eval）
 browser-use --session paipai eval "
   var modeItem = document.querySelector('.mode-menu .menu-item:nth-child(2)');
   if (modeItem && !modeItem.classList.contains('is-active')) modeItem.click();
@@ -1256,7 +1367,7 @@ browser-use --session paipai eval "
 "
 sleep 1
 
-# 步骤2：切换到 Skills 标签页
+# 步骤2：切换到 Skills 标签页（用 eval 即可，tab-item 对 JS click 响应正常）
 browser-use --session paipai eval "
   var tabs = document.querySelectorAll('.tab-item');
   for (var i = 0; i < tabs.length; i++) {
@@ -1266,35 +1377,35 @@ browser-use --session paipai eval "
 "
 sleep 1
 
-# 步骤3：点击「观点Challenge」技能节点（精确 data-node-id 定位）
-browser-use --session paipai eval "
-  var skillNode = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
-  if (skillNode) {
-    skillNode.click();
-    'CLICKED';
-  } else {
-    // 可能"研究"文件夹未展开，先展开它
-    var folder = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
-    if (folder) {
-      folder.click();
-      'NEED_EXPAND_THEN_RETRY';
-    } else {
-      'SKILLS_TAB_NOT_ACTIVE';
-    }
-  }
-"
-sleep 1
-
-# 如果返回 NEED_EXPAND_THEN_RETRY，展开后再次点击
-browser-use --session paipai eval "
-  var skillNode = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
-  if (skillNode) { skillNode.click(); 'CLICKED_AFTER_EXPAND'; }
-  else { 'STILL_NOT_FOUND'; }
-"
+# 步骤3：展开「研究」文件夹 —— 用原生 click！
+# 3a. 先用 eval 获取坐标
+RESEARCH_COORDS=$(browser-use --session paipai eval "
+  var el = document.querySelector('.node-row[data-node-id=\"virtual_research\"]');
+  if (!el) { '0 0'; }
+  else { var r = el.getBoundingClientRect();
+    Math.round(r.x + r.width/2) + ' ' + Math.round(r.y + r.height/2); }
+" 2>/dev/null | sed 's/^result: //')
+echo "Research folder at: $RESEARCH_COORDS"
+# 3b. 原生点击展开
+if [ "$RESEARCH_COORDS" != "0 0" ]; then
+  browser-use --session paipai click $RESEARCH_COORDS
+fi
 sleep 2
 
-# 步骤4：在 textarea 中输入挑战内容并发送
-# 挑战内容用 JS 文件注入（避免 shell 转义问题）
+# 步骤4：点击「观点Challenge」技能节点 —— 用原生 click！
+SKILL_COORDS=$(browser-use --session paipai eval "
+  var el = document.querySelector('.node-row[data-node-id=\"L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU\"]');
+  if (!el) { '0 0'; }
+  else { var r = el.getBoundingClientRect();
+    Math.round(r.x + r.width/2) + ' ' + Math.round(r.y + r.height/2); }
+" 2>/dev/null | sed 's/^result: //')
+echo "Challenge skill at: $SKILL_COORDS"
+if [ "$SKILL_COORDS" != "0 0" ]; then
+  browser-use --session paipai click $SKILL_COORDS
+fi
+sleep 3
+
+# 步骤5：在 textarea 中输入挑战内容（长文本用 JS setter，这是允许的）
 cat > /tmp/paipai_challenge.js << 'JSEOF'
 var textarea = document.querySelector('textarea');
 var text = `你的挑战内容，支持多段长文本...`;
@@ -1305,22 +1416,14 @@ textarea.dispatchEvent(new Event('change', { bubbles: true }));
 textarea.focus();
 'input_done: ' + textarea.value.length + ' chars';
 JSEOF
-
 browser-use --session paipai eval "$(cat /tmp/paipai_challenge.js)"
 
-# 步骤5：发送（Enter 键完整事件序列）
-browser-use --session paipai eval "
-  var t = document.querySelector('textarea');
-  t.focus();
-  ['keydown','keypress','keyup'].forEach(function(type) {
-    t.dispatchEvent(new KeyboardEvent(type, {
-      key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-      bubbles: true, cancelable: true
-    }));
-  });
-  'sent';
-"
+# 步骤6：发送 —— 用原生键盘 Enter
+browser-use --session paipai keys "Enter"
 ```
+
+> **⚠️ 关于 `browser-use click` 失效的情况**：
+> 如果原生 click 后弹窗仍为空，可能是该 Skill 需要研值/会员权限。此时退回**直接输入文本**方式（虽然不走 Challenge pipeline，但多源数据支撑的挑战仍有显著效果）。
 
 > **注意**：如果「观点Challenge」技能调用后出现参数输入弹窗（如要求输入公司名/观点），在 textarea 中填入目标公司名即可，然后点击「确定」按钮。
 
@@ -1544,6 +1647,7 @@ browser-use --session paipai eval "
 7. **保存完整记录**：原始观点 → 独立发现 → 挑战 → 修正后的结论，整个链条都有价值
 8. **⚠️ 挑战必须调用观点Challenge技能**：禁止直接在 textarea 输入挑战文本发送！必须先在 Skills 树中点击「观点Challenge」技能节点（`data-node-id="L3NraWxscy9wdWJsaWMvZmFjdC1kZWJhdGU"`）激活该技能，再输入参数发送。直接输入文本只会触发普通对话模式，不会走 Challenge 专用 pipeline，严重影响讨论深度。**这是实战教训**——曾经两次挑战都直接输入文本，PaiPai 虽然认错但走的是普通对话而非 Challenge 框架。
 9. **⚠️ 搜索信息必须标注时效性**：每条搜索结果记录 `[来源 | 日期 | 🟢🟡🟠🔴]`，分析前自查"我引用的数据是哪天的？期间有没有发生改变格局的大事件？"。**实战教训**：分析亚洲成品油时引用3月5日裂解价差数据来挑战 PaiPai，但2月28日美伊战争已导致格局剧变，3月数据本身就是受战争影响的早期快照，被用户指出"3/5日数据为战前数据"。**结构性断点（战争/制裁/政策突变）发生后，该事件之前的所有数据自动降级为🔴，只能做历史对比，不能代表当前格局。**
+10. **⚠️⚠️ Skills 树点击必须用 `browser-use click`（原生 CDP），禁止用 `eval` + JS `.click()`**：Vue 树组件不响应 JS 合成 `.click()` 事件！会导致弹窗空白、技能无法激活。正确做法：先用 `eval` 获取元素坐标（`getBoundingClientRect`），再用 `browser-use --session paipai click <x> <y>` 触发真实鼠标事件。发送用 `browser-use keys "Enter"`。**实战教训**：7/7 挑战时用 `.click()` 点击观点Challenge技能节点，弹窗 body 一直空白无法加载技能内容。
 
 ---
 
